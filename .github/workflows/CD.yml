@@ -1,0 +1,36 @@
+name: Continuous Deployment
+
+permissions:
+    contents: read
+    
+on:
+  push:
+    branches:
+      - main
+
+jobs:  
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Pack NuGet Package RustPlusApi
+      run: cd ./src/RustPlusApi/ && dotnet pack --configuration Release
+
+    - name: Pack NuGet Package RustPlusApi.Fcm
+      run: cd ./src/RustPlusApi.Fcm/ && dotnet pack --configuration Release
+
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        path: ./**/*.nupkg
+
+    - name: Publish NuGet Package
+      run: dotnet nuget push ./**/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json

@@ -1,0 +1,27 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run RustPlus FCM Listener",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"run",
+				"--project",
+				".\\samples\\RustPlus.Fcm.ConsoleApp\\RustPlus.Fcm.ConsoleApp.csproj"
+			],
+			"isBackground": true
+		},
+		{
+			"label": "Run RustPlus FCM Listener",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"run",
+				"--project",
+				".\\samples\\RustPlus.Fcm.ConsoleApp\\RustPlus.Fcm.ConsoleApp.csproj"
+			],
+			"isBackground": true
+		}
+	]
+}
