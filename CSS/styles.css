@@ -728,6 +728,10 @@ body.auth-locked {
   border: 1px solid #555555;
 }
 
+.fcm-status:empty {
+  display: none;
+}
+
 .new-switch-form {
   display: grid;
   gap: 12px;
@@ -1571,6 +1575,22 @@ body.auth-locked {
   align-items: stretch;
 }
 
+.virtual-monitor-item {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+  overflow: visible;
+}
+
+.virtual-monitor-item .monitor-header {
+  width: 100%;
+}
+
+.virtual-monitor-item .monitor-virtual-grid {
+  justify-self: center;
+}
+
 .monitor-item.is-collapsed .monitor-crate {
   display: none;
 }
@@ -1617,16 +1637,23 @@ body.auth-locked {
 }
 
 .monitor-virtual-grid {
-  width: min(360px, 100%);
-  aspect-ratio: 716 / 954;
+  --virtual-monitor-rows: 8;
+  --monitor-grid-gap: 3px;
+  --virtual-monitor-width: min(360px, 100%);
+  --virtual-monitor-row-height: 57px;
+  --virtual-monitor-base-height: calc((8 * var(--virtual-monitor-row-height)) + (7 * var(--monitor-grid-gap)));
+  width: var(--virtual-monitor-width);
+  min-height: var(--virtual-monitor-base-height);
+  height: calc(var(--virtual-monitor-rows) * var(--virtual-monitor-row-height) + ((var(--virtual-monitor-rows) - 1) * var(--monitor-grid-gap)));
   margin: 12px auto 0;
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  grid-template-rows: repeat(8, 1fr);
-  gap: 3px;
+  grid-template-rows: repeat(var(--virtual-monitor-rows), minmax(0, 1fr));
+  gap: var(--monitor-grid-gap);
   background: #4a4a4a;
   border: 1px solid #555555;
   border-radius: 4px;
+  overflow: hidden;
 }
 
 .monitor-slot {

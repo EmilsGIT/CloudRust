@@ -113,7 +113,7 @@
           <div class="switch-column">
               <div class="info-card switch-section-card">
                 <div class="switch-help-row">
-                  <img src="../Icons/Smartswitch.png" alt="Smart switch" class="switch-help-icon" />
+                  <img src="../resources/items/smart.switch.png" alt="Smart switch" class="switch-help-icon" />
                   <p class="switch-help">Pair a Smart Switch</p>
                 </div>
                 <form id="newSwitchForm" class="new-switch-form" novalidate>
@@ -128,7 +128,7 @@
                     <div id="switchPairStatus" class="pairing-id-input" data-pairing-state="waiting" role="status" aria-label="Smart Switch pairing status"></div>
                   </label>
 
-                  <p id="fcmStatus" class="fcm-status">Name your smart switch, then pair it in Rust+ to enable Add.</p>
+                  <p id="fcmStatus" class="fcm-status"></p>
 
                   <button id="addSwitchButton" class="ok-button" type="submit" disabled>Add Smart Switch</button>
                 </form>
@@ -144,7 +144,7 @@
           <div class="switch-column">
               <div class="info-card switch-section-card">
                 <div class="switch-help-row">
-                  <img src="../Icons/Smartswitch.png" alt="Smart switch" class="switch-help-icon" />
+                  <img src="../resources/items/smart.switch.png" alt="Smart switch" class="switch-help-icon" />
                   <p class="switch-help">Create Virtual Switch</p>
                 </div>
                 <form id="virtualSwitchForm" class="new-switch-form">
@@ -188,7 +188,7 @@
                     <div id="monitorPairStatus" class="pairing-id-input" data-pairing-state="waiting" role="status" aria-label="Storage monitor pairing status"></div>
                   </label>
 
-                  <p id="monitorFcmStatus" class="fcm-status">Name your storage monitor, then pair it in Rust+ to enable Add.</p>
+                  <p id="monitorFcmStatus" class="fcm-status"></p>
 
                   <button id="addMonitorButton" class="ok-button" type="submit" disabled>Add Storage Monitor</button>
                 </form>
@@ -2035,7 +2035,7 @@
         id: String(entry.id),
         name: entry.name || String(entry.id),
         state: entry.state || 'unknown',
-        iconUrl: '../Icons/smartswitch.png',
+        iconUrl: '../resources/items/smart.switch.png',
         iconAlt: 'Smart switch'
       }));
 
@@ -4126,22 +4126,46 @@
       linkedMonitorIds.forEach((monitorId) => {
         const monitorItems = monitorItemsById.get(String(monitorId)) || [];
         monitorItems.forEach((item) => {
-          const key = String(item.itemId);
-          if (itemMap.has(key)) {
-            // Sum quantities for duplicate items
-            itemMap.get(key).quantity += Number(item.quantity) || 0;
-          } else {
-            // Clone the item to avoid mutating original
-            itemMap.set(key, {
-              ...item,
-              quantity: Number(item.quantity) || 0
-            });
+          const key = String(item.itemId ?? item.shortName ?? '');
+          if (!key) {
+            return;
           }
+
+          const quantity = Number(item.quantity) || 0;
+          const existingItem = itemMap.get(key);
+          if (existingItem) {
+            existingItem.quantity += quantity;
+            return;
+          }
+
+          itemMap.set(key, {
+            ...item,
+            quantity
+          });
         });
       });
 
-      // Return as array, sorted by itemId for consistency
-      return Array.from(itemMap.values()).sort((a, b) => String(a.itemId).localeCompare(String(b.itemId)));
+      return Array.from(itemMap.values()).sort((left, right) => String(left.itemId ?? left.shortName ?? '').localeCompare(String(right.itemId ?? right.shortName ?? '')));
+    }
+
+
+    function getVirtualMonitorSlotCount(items) {
+      return Math.max(48, Array.isArray(items) ? items.length : 0);
+    }
+
+    function syncVirtualMonitorCardHeight(virtualMonitorId) {
+      const virtualItem = virtualMonitorList.querySelector(`.virtual-monitor-item[data-virtual-monitor-id="${virtualMonitorId}"]`);
+      const header = virtualItem?.querySelector('.monitor-header');
+      const grid = virtualItem?.querySelector('.monitor-virtual-grid');
+      if (!virtualItem || !header || !grid) {
+        return;
+      }
+
+      const headerHeight = Math.ceil(header.getBoundingClientRect().height);
+      const gridHeight = Math.ceil(grid.getBoundingClientRect().height);
+      const verticalGap = 12;
+      const verticalPadding = 20;
+      virtualItem.style.minHeight = `${headerHeight + gridHeight + verticalGap + verticalPadding}px`;
     }
 
 
@@ -4152,7 +4176,11 @@
       }
 
       const combinedItems = getVirtualMonitorCombinedItems(virtualMonitorId);
-      renderItemSlots(virtualGrid, combinedItems, 48);
+      const slotCount = getVirtualMonitorSlotCount(combinedItems);
+      const rowCount = Math.max(8, Math.ceil(slotCount / 6));
+      virtualGrid.style.setProperty('--virtual-monitor-rows', String(rowCount));
+      renderItemSlots(virtualGrid, combinedItems, slotCount);
+      syncVirtualMonitorCardHeight(virtualMonitorId);
       setVirtualMonitorItemCount(virtualMonitorId, combinedItems.length);
       setVirtualMonitorLinkedCount(virtualMonitorId);
     }
@@ -4270,7 +4298,7 @@
       item.innerHTML = `
         <button type="button" class="real-power-in" data-real-id="${switchEntry.id}" title="Power in"></button>
         <div class="real-switch-meta">
-          <img src="../Icons/Smartswitch.png" alt="Smart switch" class="smart-switch-icon" />
+          <img src="../resources/items/smart.switch.png" alt="Smart switch" class="smart-switch-icon" />
           <div class="switch-meta">
             <span class="switch-name">${switchEntry.name}</span>
             <span class="switch-reachability" data-status="${switchEntry.responsiveness || 'checking'}">${switchEntry.responsivenessLabel || getSwitchResponsivenessLabel(switchEntry.responsiveness)}</span>
@@ -4681,7 +4709,7 @@
         switchPairStatusInput.dataset.pairingState = 'waiting';
       }
       if (fcmStatus) {
-        fcmStatus.textContent = 'Name your smart switch, then pair it in Rust+ to enable Add.';
+        fcmStatus.textContent = '';
       }
       updateSwitchAddState();
     }
@@ -4694,7 +4722,7 @@
         monitorPairStatusInput.dataset.pairingState = 'waiting';
       }
       if (monitorFcmStatus) {
-        monitorFcmStatus.textContent = 'Name your storage monitor, then pair it in Rust+ to enable Add.';
+        monitorFcmStatus.textContent = '';
       }
       updateMonitorAddState();
     }
@@ -4807,10 +4835,10 @@
       source.onopen = () => {
         clearFcmReconnectTimer();
         if (fcmStatus) {
-          fcmStatus.textContent = 'Connected. Name your smart switch, then pair it in Rust+ to enable Add.';
+          fcmStatus.textContent = '';
         }
         if (monitorFcmStatus) {
-          monitorFcmStatus.textContent = 'Connected. Name your storage monitor, then pair it in Rust+ to enable Add.';
+          monitorFcmStatus.textContent = '';
         }
       };
 

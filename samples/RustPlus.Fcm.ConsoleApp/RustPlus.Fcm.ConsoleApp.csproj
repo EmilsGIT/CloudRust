@@ -9,4 +9,27 @@
       <ProjectReference Include="..\..\src\RustPlusApi\RustPlusApi.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Content Include="..\..\HTML\**\*">
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <Link>HTML\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      </Content>
+      <Content Include="..\..\CSS\**\*">
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <Link>CSS\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      </Content>
+      <Content Include="..\..\Icons\**\*">
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <Link>Icons\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      </Content>
+      <Content Include="..\..\resources\**\*">
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <Link>resources\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      </Content>
+      <Content Include="..\..\rustplus.config.json">
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <Link>rustplus.config.json</Link>
+      </Content>
+    </ItemGroup>
+
 </Project>
