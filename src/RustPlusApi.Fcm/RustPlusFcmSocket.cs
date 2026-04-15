@@ -31,7 +31,7 @@ public abstract class RustPlusFcmSocket(Credentials credentials, ICollection<str
     private TcpClient? _tcpClient;
     private SslStream? _sslStream;
 
-    private readonly CancellationTokenSource _cancellationTokenSource = new();
+    private CancellationTokenSource _cancellationTokenSource = new();
     private CancellationToken CancellationToken => _cancellationTokenSource.Token;
 
     private readonly JsonSerializerOptions _parsingOptions = new()
@@ -83,6 +83,17 @@ public abstract class RustPlusFcmSocket(Credentials credentials, ICollection<str
 
     public async Task ConnectAsync()
     {
+        if (_cancellationTokenSource.IsCancellationRequested)
+        {
+            _cancellationTokenSource.Dispose();
+            _cancellationTokenSource = new CancellationTokenSource();
+        }
+
+        _sslStream?.Dispose();
+        _sslStream = null;
+        _tcpClient?.Dispose();
+        _tcpClient = null;
+
         Connecting?.Invoke(this, EventArgs.Empty);
 
         _tcpClient = new TcpClient();
@@ -134,10 +145,17 @@ public abstract class RustPlusFcmSocket(Credentials credentials, ICollection<str
     {
         Disconnecting?.Invoke(this, EventArgs.Empty);
 
-        _cancellationTokenSource.Cancel();
+        if (!_cancellationTokenSource.IsCancellationRequested)
+        {
+            _cancellationTokenSource.Cancel();
+        }
 
         _sslStream?.Close();
+        _sslStream?.Dispose();
+        _sslStream = null;
         _tcpClient?.Close();
+        _tcpClient?.Dispose();
+        _tcpClient = null;
 
         Disconnected?.Invoke(this, EventArgs.Empty);
     }
@@ -145,7 +163,12 @@ public abstract class RustPlusFcmSocket(Credentials credentials, ICollection<str
     /// <summary>
     /// Releases resources used by the <see cref="RustPlusFcmSocket"/>.
     /// </summary>
-    public void Dispose() => SuppressFinalize(this);
+    public void Dispose()
+    {
+        Disconnect();
+        _cancellationTokenSource.Dispose();
+        SuppressFinalize(this);
+    }
 
     /// <summary>
     /// Continuously receives and processes messages from the FCM server over the SSL stream.

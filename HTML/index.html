@@ -450,16 +450,20 @@
       function extractObserverEntityId(payload) {
         const candidates = [
           payload?.entityId,
+          payload?.EntityId,
           payload?.id,
           payload?.entityID,
           payload?.entity_id,
           payload?.data?.entityId,
+          payload?.data?.EntityId,
           payload?.data?.id,
           payload?.data,
           payload?.Data?.EntityId,
           payload?.Data,
           payload?.payload?.entityId,
+          payload?.payload?.EntityId,
           payload?.payload?.id,
+          payload?.payload?.data?.EntityId,
           payload?.payload?.Data?.EntityId,
           payload?.payload?.Data
         ];
@@ -588,6 +592,20 @@
               recentEvents.forEach((recentEvent) => {
                 seenEvents.add(buildEventKey(recentEvent));
               });
+
+              const latestSwitchEvent = recentEvents.find((recentEvent) => isSwitchPairingEvent(recentEvent));
+              const latestMonitorEvent = recentEvents.find((recentEvent) => isMonitorPairingEvent(recentEvent));
+              const latestSwitchEntityId = extractObserverEntityId(latestSwitchEvent?.payload);
+              const latestMonitorEntityId = extractObserverEntityId(latestMonitorEvent?.payload);
+
+              if (!switchIdInput?.value?.trim() && latestSwitchEntityId) {
+                syncSwitchPairingUi(latestSwitchEntityId, 'Smart switch paired. Ready to add.');
+              }
+
+              if (!monitorIdInput?.value?.trim() && latestMonitorEntityId) {
+                syncMonitorPairingUi(latestMonitorEntityId, 'Storage monitor paired. Ready to add.');
+              }
+
               hasSeededRecentEvents = true;
               return;
             }
@@ -823,12 +841,14 @@
     let adminSnapshot = null;
     let pairingStatusSnapshot = null;
     let pairingStatusPollTimer = null;
+    let lastPairingListenerRestartAttemptAt = 0;
     let lastPairingImportedAtUtc = null;
     let lastObservedSwitchPairingAtUtc = null;
     let lastObservedMonitorPairingAtUtc = null;
     let pairingConfigJson = '';
     let pairingSteamIdentity = null;
     let latestTeamMembers = [];
+    const pairingListenerRestartCooldownMs = 15000;
     const fallbackStorage = new Map();
     if (mapDebugToggle) {
       mapDebugToggle.checked = true;
@@ -1198,20 +1218,55 @@
       pairingStatusPollTimer = null;
     }
 
+    function hasPendingPairingFields() {
+      const switchPending = !switchIdInput?.value?.trim();
+      const monitorPending = !monitorIdInput?.value?.trim();
+      return switchPending || monitorPending;
+    }
+
+    function shouldKeepPairingStatusPollActive() {
+      if (!authenticatedUser || authenticatedUser.isAdmin) {
+        return false;
+      }
+
+      const helperRunning = Boolean(pairingStatusSnapshot?.steamLogin?.isRunning);
+      const hasConfig = Boolean(pairingStatusSnapshot?.hasConfig);
+      const listenerConnected = Boolean(pairingStatusSnapshot?.listenerConnected);
+      const pairingTabActive = Array.from(panels).some((panel) => panel.dataset.panel === 'pairing' && panel.classList.contains('active'));
+      return helperRunning || pairingTabActive || hasPendingPairingFields() || (hasConfig && !listenerConnected);
+    }
+
+    async function maybeEnsurePairingListenerRunning() {
+      if (!authenticatedUser || authenticatedUser.isAdmin) {
+        return;
+      }
+
+      if (!pairingStatusSnapshot?.hasConfig || pairingStatusSnapshot?.listenerConnected || pairingStatusSnapshot?.steamLogin?.isRunning) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastPairingListenerRestartAttemptAt < pairingListenerRestartCooldownMs) {
+        return;
+      }
+
+      lastPairingListenerRestartAttemptAt = now;
+
+      try {
+        await fetchJson('/api/pairing/listener/start', {
+          method: 'POST'
+        });
+      } catch {
+      }
+    }
+
     function ensurePairingStatusPoll() {
       if (pairingStatusPollTimer) {
         return;
       }
 
       pairingStatusPollTimer = setInterval(() => {
-        if (!authenticatedUser || authenticatedUser.isAdmin) {
-          clearPairingStatusPoll();
-          return;
-        }
-
-        const helperRunning = Boolean(pairingStatusSnapshot?.steamLogin?.isRunning);
-        const pairingTabActive = Array.from(panels).some((panel) => panel.dataset.panel === 'pairing' && panel.classList.contains('active'));
-        if (!helperRunning && !pairingTabActive) {
+        if (!shouldKeepPairingStatusPollActive()) {
           clearPairingStatusPoll();
           return;
         }
@@ -1343,11 +1398,13 @@
           await loadPairingConfig();
         }
 
-        if (pairingStatusSnapshot?.steamLogin?.isRunning) {
+        if (shouldKeepPairingStatusPollActive()) {
           ensurePairingStatusPoll();
         } else {
           clearPairingStatusPoll();
         }
+
+        await maybeEnsurePairingListenerRunning();
 
         syncPendingPairingsFromStatusSnapshot();
         renderPairingStatus();
@@ -1366,21 +1423,29 @@
     function syncPendingPairingsFromStatusSnapshot() {
       const latestSwitchPairing = pairingStatusSnapshot?.latestSmartSwitchPairing;
       const latestMonitorPairing = pairingStatusSnapshot?.latestStorageMonitorPairing;
-      const latestSwitchObservedAtUtc = typeof latestSwitchPairing?.observedAtUtc === 'string'
-        ? latestSwitchPairing.observedAtUtc
+      const latestSwitchObservedAtUtc = typeof (latestSwitchPairing?.observedAtUtc ?? latestSwitchPairing?.ObservedAtUtc) === 'string'
+        ? (latestSwitchPairing.observedAtUtc ?? latestSwitchPairing.ObservedAtUtc)
         : null;
-      const latestMonitorObservedAtUtc = typeof latestMonitorPairing?.observedAtUtc === 'string'
-        ? latestMonitorPairing.observedAtUtc
+      const latestMonitorObservedAtUtc = typeof (latestMonitorPairing?.observedAtUtc ?? latestMonitorPairing?.ObservedAtUtc) === 'string'
+        ? (latestMonitorPairing.observedAtUtc ?? latestMonitorPairing.ObservedAtUtc)
         : null;
+      const latestSwitchEntityId = extractEntityId(latestSwitchPairing);
+      const latestMonitorEntityId = extractEntityId(latestMonitorPairing);
+      const switchFieldEmpty = !switchIdInput?.value?.trim();
+      const monitorFieldEmpty = !monitorIdInput?.value?.trim();
 
-      if (latestSwitchObservedAtUtc && latestSwitchObservedAtUtc !== lastObservedSwitchPairingAtUtc) {
-        lastObservedSwitchPairingAtUtc = latestSwitchObservedAtUtc;
-        applyPairedSwitchId(extractEntityId(latestSwitchPairing));
+      if (latestSwitchEntityId && ((latestSwitchObservedAtUtc && latestSwitchObservedAtUtc !== lastObservedSwitchPairingAtUtc) || switchFieldEmpty)) {
+        if (latestSwitchObservedAtUtc) {
+          lastObservedSwitchPairingAtUtc = latestSwitchObservedAtUtc;
+        }
+        applyPairedSwitchId(latestSwitchEntityId);
       }
 
-      if (latestMonitorObservedAtUtc && latestMonitorObservedAtUtc !== lastObservedMonitorPairingAtUtc) {
-        lastObservedMonitorPairingAtUtc = latestMonitorObservedAtUtc;
-        applyPairedMonitorId(extractEntityId(latestMonitorPairing));
+      if (latestMonitorEntityId && ((latestMonitorObservedAtUtc && latestMonitorObservedAtUtc !== lastObservedMonitorPairingAtUtc) || monitorFieldEmpty)) {
+        if (latestMonitorObservedAtUtc) {
+          lastObservedMonitorPairingAtUtc = latestMonitorObservedAtUtc;
+        }
+        applyPairedMonitorId(latestMonitorEntityId);
       }
     }
 
@@ -2604,14 +2669,23 @@
     function extractEntityId(payload) {
       const candidates = [
         payload?.entityId,
+        payload?.EntityId,
         payload?.id,
         payload?.entityID,
         payload?.entity_id,
         payload?.data?.entityId,
+        payload?.data?.EntityId,
         payload?.data?.id,
         payload?.data,
+        payload?.Data?.entityId,
         payload?.Data?.EntityId,
-        payload?.Data
+        payload?.Data,
+        payload?.payload?.entityId,
+        payload?.payload?.EntityId,
+        payload?.payload?.data?.entityId,
+        payload?.payload?.data?.EntityId,
+        payload?.payload?.Data?.EntityId,
+        payload?.payload?.Data
       ];
 
       for (const candidate of candidates) {
@@ -4840,6 +4914,8 @@
         if (monitorFcmStatus) {
           monitorFcmStatus.textContent = '';
         }
+        loadPairingStatus().catch(() => {
+        });
       };
 
       source.onmessage = (event) => {

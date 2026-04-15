@@ -46,7 +46,10 @@ var authSessionLifetime = TimeSpan.FromDays(14);
 const string sessionCookieName = "rustplus_session";
 const string adminUserId = "__admin__";
 const string adminUsername = "admin";
-const string adminPassword = "uhs32syj";
+var webPrefix = GetEnvironmentVariableOrDefault("RUSTPLUS_WEB_PREFIX", "http://localhost:5057/");
+var adminPassword = GetEnvironmentVariableOrDefault("RUSTPLUS_ADMIN_PASSWORD", "uhs32syj");
+var sessionCookieSecure = string.Equals(Environment.GetEnvironmentVariable("RUSTPLUS_COOKIE_SECURE"), "true", StringComparison.OrdinalIgnoreCase)
+    || webPrefix.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 var adminAccount = new UserAccountRecord
 {
     Id = adminUserId,
@@ -60,8 +63,13 @@ Directory.CreateDirectory(authDataDirectoryPath);
 Directory.CreateDirectory(userDataDirectoryPath);
 SaveAuthSessions(authSessionsFilePath, authSessions);
 
-var webTask = RunWebBridgeAsync("http://localhost:5057/", httpCancellationTokenSource.Token);
-Console.WriteLine("Web UI: http://localhost:5057");
+if (string.Equals(adminPassword, "uhs32syj", StringComparison.Ordinal))
+{
+    Console.WriteLine("WARNING: Using default admin password. Set RUSTPLUS_ADMIN_PASSWORD before exposing the app publicly.");
+}
+
+var webTask = RunWebBridgeAsync(webPrefix, httpCancellationTokenSource.Token);
+Console.WriteLine($"Web UI prefix: {webPrefix}");
 
 var shutdownSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
@@ -2245,6 +2253,7 @@ void SetAuthSessionCookie(HttpListenerResponse response, string token, DateTimeO
     var cookie = new Cookie(sessionCookieName, token, "/")
     {
         HttpOnly = true,
+        Secure = sessionCookieSecure,
         Expires = expiresAtUtc.UtcDateTime
     };
 
@@ -2256,10 +2265,17 @@ void ClearAuthSessionCookie(HttpListenerResponse response)
     var cookie = new Cookie(sessionCookieName, string.Empty, "/")
     {
         HttpOnly = true,
+        Secure = sessionCookieSecure,
         Expires = DateTime.UtcNow.AddDays(-7)
     };
 
     response.SetCookie(cookie);
+}
+
+static string GetEnvironmentVariableOrDefault(string variableName, string defaultValue)
+{
+    var value = Environment.GetEnvironmentVariable(variableName);
+    return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
 }
 
 static bool TryNormalizeEmail(string? email, out string normalizedEmail)
