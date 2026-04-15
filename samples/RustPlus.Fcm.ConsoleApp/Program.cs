@@ -46,10 +46,10 @@ var authSessionLifetime = TimeSpan.FromDays(14);
 const string sessionCookieName = "rustplus_session";
 const string adminUserId = "__admin__";
 const string adminUsername = "admin";
-var webPrefix = GetEnvironmentVariableOrDefault("RUSTPLUS_WEB_PREFIX", "http://localhost:5057/");
+var webPrefixes = GetWebPrefixes();
 var adminPassword = GetEnvironmentVariableOrDefault("RUSTPLUS_ADMIN_PASSWORD", "uhs32syj");
 var sessionCookieSecure = string.Equals(Environment.GetEnvironmentVariable("RUSTPLUS_COOKIE_SECURE"), "true", StringComparison.OrdinalIgnoreCase)
-    || webPrefix.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+    || webPrefixes.Any(prefix => prefix.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
 var adminAccount = new UserAccountRecord
 {
     Id = adminUserId,
@@ -68,8 +68,8 @@ if (string.Equals(adminPassword, "uhs32syj", StringComparison.Ordinal))
     Console.WriteLine("WARNING: Using default admin password. Set RUSTPLUS_ADMIN_PASSWORD before exposing the app publicly.");
 }
 
-var webTask = RunWebBridgeAsync(webPrefix, httpCancellationTokenSource.Token);
-Console.WriteLine($"Web UI prefix: {webPrefix}");
+var webTask = RunWebBridgeAsync(webPrefixes, httpCancellationTokenSource.Token);
+Console.WriteLine($"Web UI prefixes: {string.Join(", ", webPrefixes)}");
 
 var shutdownSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
@@ -666,10 +666,14 @@ async Task HandlePairingSteamLoginStartRequestAsync(HttpListenerContext context,
     }
 }
 
-async Task RunWebBridgeAsync(string prefix, CancellationToken cancellationToken)
+async Task RunWebBridgeAsync(IReadOnlyList<string> prefixes, CancellationToken cancellationToken)
 {
     var httpListener = new HttpListener();
-    httpListener.Prefixes.Add(prefix);
+    foreach (var prefix in prefixes)
+    {
+        httpListener.Prefixes.Add(prefix);
+    }
+
     httpListener.Start();
 
     try
@@ -2276,6 +2280,25 @@ static string GetEnvironmentVariableOrDefault(string variableName, string defaul
 {
     var value = Environment.GetEnvironmentVariable(variableName);
     return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
+}
+
+static string[] GetWebPrefixes()
+{
+    var configuredPrefixes = Environment.GetEnvironmentVariable("RUSTPLUS_WEB_PREFIXES");
+    if (!string.IsNullOrWhiteSpace(configuredPrefixes))
+    {
+        var parsedPrefixes = configuredPrefixes
+            .Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(prefix => !string.IsNullOrWhiteSpace(prefix))
+            .ToArray();
+
+        if (parsedPrefixes.Length > 0)
+        {
+            return parsedPrefixes;
+        }
+    }
+
+    return [GetEnvironmentVariableOrDefault("RUSTPLUS_WEB_PREFIX", "http://localhost:5057/")];
 }
 
 static bool TryNormalizeEmail(string? email, out string normalizedEmail)
