@@ -2288,7 +2288,7 @@ static string[] GetWebPrefixes()
     if (!string.IsNullOrWhiteSpace(configuredPrefixes))
     {
         var parsedPrefixes = configuredPrefixes
-            .Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(prefix => !string.IsNullOrWhiteSpace(prefix))
             .ToArray();
 
