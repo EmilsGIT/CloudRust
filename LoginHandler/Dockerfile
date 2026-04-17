@@ -16,7 +16,7 @@ RUN apt-get update \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends google-chrome-stable \
-    && printf '#!/bin/sh\nexec /usr/bin/google-chrome-stable --disable-dev-shm-usage --disable-gpu --disable-crash-reporter --disable-crashpad --no-first-run --no-default-browser-check --window-size=1440,900 "$@"\n' > /usr/local/bin/google-chrome-login-handler \
+    && printf '#!/bin/sh\nLOG_FILE="${LOGIN_HANDLER_BROWSER_LOG:-/tmp/google-chrome-login-handler.log}"\necho "[$(date -Iseconds)] launching chrome $*" >> "$LOG_FILE"\nexec /usr/bin/google-chrome-stable --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-crash-reporter --disable-crashpad --no-first-run --no-default-browser-check --window-size=1440,900 "$@" >> "$LOG_FILE" 2>&1\n' > /usr/local/bin/google-chrome-login-handler \
     && chmod +x /usr/local/bin/google-chrome-login-handler \
     && rm -rf /var/lib/apt/lists/*
 
