@@ -660,6 +660,8 @@ function appendLog(session, message) {
     message
   };
 
+  console.log(`[session:${session.id}] ${message}`);
+
   session.logs.push(entry);
   if (session.logs.length > sessionLogsLimit) {
     session.logs.splice(0, session.logs.length - sessionLogsLimit);
