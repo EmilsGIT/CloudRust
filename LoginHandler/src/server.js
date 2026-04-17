@@ -21,6 +21,7 @@ const sessionTimeoutMs = Number(process.env.LOGIN_HANDLER_SESSION_TIMEOUT_MS || 
 const sessionRetentionMs = Number(process.env.LOGIN_HANDLER_SESSION_RETENTION_MS || 30 * 60 * 1000);
 const displayBase = Number(process.env.LOGIN_HANDLER_DISPLAY_BASE || 120);
 const sessionLogsLimit = 200;
+const browserCommand = process.env.LOGIN_HANDLER_BROWSER_COMMAND || '/usr/local/bin/google-chrome-login-handler';
 
 const sessions = new Map();
 const proxy = createProxyServer({ ws: true, xfwd: true });
@@ -239,7 +240,8 @@ async function createSession({ userId, label }) {
       {
         env: {
           ...baseEnv,
-          BROWSER: process.env.LOGIN_HANDLER_BROWSER_COMMAND || 'google-chrome-login-handler'
+          BROWSER: browserCommand,
+          CHROME_PATH: browserCommand
         },
         onExit: async (exitCode) => {
           await finalizeHelperSession(session, exitCode);
