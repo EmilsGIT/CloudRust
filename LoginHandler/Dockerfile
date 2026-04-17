@@ -16,6 +16,8 @@ RUN apt-get update \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends google-chrome-stable \
+    && printf '#!/bin/sh\nexec /usr/bin/google-chrome-stable --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check "$@"\n' > /usr/local/bin/google-chrome-login-handler \
+    && chmod +x /usr/local/bin/google-chrome-login-handler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

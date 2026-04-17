@@ -48,6 +48,7 @@ Environment variables:
 - `LOGIN_HANDLER_SESSION_RETENTION_MS`: How long completed session artifacts are kept. Default `1800000`.
 - `LOGIN_HANDLER_HELPER_PACKAGE`: Helper package. Default `@liamcottle/rustplus.js`.
 - `LOGIN_HANDLER_HELPER_SUBCOMMAND`: Helper command. Default `fcm-register`.
+- `LOGIN_HANDLER_BROWSER_COMMAND`: Browser launcher command. Default `google-chrome-login-handler`.
 
 ## API
 

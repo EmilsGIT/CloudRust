@@ -130,7 +130,7 @@ app.get('/sessions/:sessionId/view', (req, res) => {
     return;
   }
 
-  res.redirect(buildViewerRedirectUrl(session));
+  res.type('html').send(buildViewerPageHtml(session));
 });
 
 const server = http.createServer(app);
@@ -239,7 +239,7 @@ async function createSession({ userId, label }) {
       {
         env: {
           ...baseEnv,
-          BROWSER: 'google-chrome-stable'
+          BROWSER: process.env.LOGIN_HANDLER_BROWSER_COMMAND || 'google-chrome-login-handler'
         },
         onExit: async (exitCode) => {
           await finalizeHelperSession(session, exitCode);
@@ -442,7 +442,7 @@ function serializeSession(session, options = {}) {
   };
 }
 
-function buildViewerRedirectUrl(session) {
+function buildHostedViewerUrl(session) {
   const baseUrl = new URL(publicBaseUrl);
   const viewerUrl = new URL(hostedViewerBaseUrl);
   const isSecure = baseUrl.protocol === 'https:';
@@ -456,6 +456,202 @@ function buildViewerRedirectUrl(session) {
   viewerUrl.searchParams.set('path', `api/sessions/${session.id}/websockify?token=${session.accessToken}`);
 
   return viewerUrl.toString();
+}
+
+function buildViewerPageHtml(session) {
+  const viewerUrl = buildHostedViewerUrl(session);
+  const safeLabel = escapeHtml(session.label || 'Steam login');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Continue With Steam</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115;
+      --panel: #171a21;
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #f3f5f8;
+      --muted: #a7b0bd;
+      --accent: #7cc6ff;
+      --accent-soft: rgba(124, 198, 255, 0.18);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top, rgba(73, 118, 193, 0.28), transparent 36%),
+        linear-gradient(180deg, #11151b 0%, #0b0d11 100%);
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      padding: 18px;
+      gap: 14px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      background: rgba(20, 24, 31, 0.88);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+    }
+
+    .topbar-copy {
+      min-width: 0;
+    }
+
+    .eyebrow {
+      margin: 0 0 4px;
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.15;
+    }
+
+    .subtitle {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .address-pill {
+      flex: 0 1 420px;
+      max-width: 100%;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: var(--accent-soft);
+      color: var(--text);
+      font-size: 13px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .viewer-frame {
+      position: relative;
+      min-height: 0;
+      border: 1px solid var(--panel-border);
+      border-radius: 24px;
+      overflow: hidden;
+      background: var(--panel);
+      box-shadow: 0 28px 70px rgba(0, 0, 0, 0.38);
+    }
+
+    iframe {
+      display: block;
+      width: 100%;
+      height: calc(100vh - 124px);
+      min-height: 720px;
+      border: 0;
+      background: #0b0d11;
+    }
+
+    .loading {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(180deg, rgba(23, 26, 33, 0.92), rgba(11, 13, 17, 0.75));
+      color: var(--muted);
+      font-size: 14px;
+      transition: opacity 180ms ease;
+      pointer-events: none;
+    }
+
+    .loading.hidden {
+      opacity: 0;
+    }
+
+    @media (max-width: 880px) {
+      .shell {
+        padding: 10px;
+      }
+
+      .topbar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .address-pill {
+        width: 100%;
+      }
+
+      iframe {
+        min-height: calc(100vh - 168px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="topbar-copy">
+        <p class="eyebrow">CloudRust Secure Session</p>
+        <h1>Continue with Steam</h1>
+        <p class="subtitle">Finish the sign-in flow for ${safeLabel} in this secure browser session.</p>
+      </div>
+      <div class="address-pill">steamcommunity.com</div>
+    </header>
+
+    <section class="viewer-frame" aria-label="Remote Steam session">
+      <div id="loading" class="loading">Starting secure browser session...</div>
+      <iframe id="viewer" allow="clipboard-read; clipboard-write" referrerpolicy="no-referrer" src="${escapeHtml(viewerUrl)}"></iframe>
+    </section>
+  </div>
+
+  <script>
+    const viewer = document.getElementById('viewer');
+    const loading = document.getElementById('loading');
+
+    const hideLoading = () => {
+      loading.classList.add('hidden');
+      window.setTimeout(() => loading.remove(), 220);
+    };
+
+    viewer.addEventListener('load', () => {
+      window.setTimeout(hideLoading, 900);
+    }, { once: true });
+
+    window.setTimeout(hideLoading, 4000);
+  </script>
+</body>
+</html>`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function appendLog(session, message) {
