@@ -42,6 +42,12 @@ var userStateGate = new SemaphoreSlim(1, 1);
 var userAccountsStore = LoadUserAccounts(usersFilePath);
 var authSessions = LoadAuthSessions(authSessionsFilePath);
 var listenerRuntimes = new ConcurrentDictionary<string, ListenerRuntime>();
+var loginHandlerBaseUrl = NormalizeOptionalBaseUrl(Environment.GetEnvironmentVariable("RUSTPLUS_LOGIN_HANDLER_BASE_URL"));
+var loginHandlerHttpClient = new HttpClient();
+var caseInsensitiveJsonSerializerOptions = new JsonSerializerOptions
+{
+    PropertyNameCaseInsensitive = true
+};
 var authSessionLifetime = TimeSpan.FromDays(14);
 const string sessionCookieName = "rustplus_session";
 const string adminUserId = "__admin__";
@@ -486,31 +492,7 @@ async Task CompleteSteamLoginFlowAsync(ListenerRuntime runtime, int exitCode)
     try
     {
         var configJson = await File.ReadAllTextAsync(runtime.SteamLoginConfigPath);
-        var config = ParseJavaScriptConfigContent(configJson);
-        _ = config.ConvertToCredentials();
-
-        await userStateGate.WaitAsync();
-        try
-        {
-            var state = LoadUserState(runtime.UserId);
-            state.ListenerConfigJson = configJson;
-            SaveUserState(runtime.UserId, state);
-        }
-        finally
-        {
-            userStateGate.Release();
-        }
-
-        runtime.SteamLoginStatus = "completed";
-        runtime.SteamLoginImportedAtUtc = DateTimeOffset.UtcNow;
-        runtime.SteamLoginLastMessage = "Steam login flow completed. Config imported.";
-
-        var account = TryGetUserAccountById(runtime.UserId);
-        if (account is not null && !account.IsAdmin)
-        {
-            await StartUserListenerAsync(account);
-            runtime.SteamLoginLastMessage = "Steam login flow completed. Config imported and listener started.";
-        }
+        await ImportSteamLoginConfigAsync(runtime, configJson);
     }
     catch (Exception ex)
     {
@@ -519,8 +501,308 @@ async Task CompleteSteamLoginFlowAsync(ListenerRuntime runtime, int exitCode)
     }
 }
 
-ProcessStartInfo CreateSteamLoginProcessStartInfo(string workingDirectory, string configFilePath)
+async Task ImportSteamLoginConfigAsync(ListenerRuntime runtime, string configJson)
 {
+    var config = ParseJavaScriptConfigContent(configJson);
+    _ = config.ConvertToCredentials();
+
+    await userStateGate.WaitAsync();
+    try
+    {
+        var state = LoadUserState(runtime.UserId);
+        state.ListenerConfigJson = configJson;
+        SaveUserState(runtime.UserId, state);
+    }
+    finally
+    {
+        userStateGate.Release();
+    }
+
+    runtime.SteamLoginStatus = "completed";
+    runtime.SteamLoginImportedAtUtc = DateTimeOffset.UtcNow;
+    runtime.SteamLoginLastMessage = "Steam login flow completed. Config imported.";
+
+    var account = TryGetUserAccountById(runtime.UserId);
+    if (account is not null && !account.IsAdmin)
+    {
+        await StartUserListenerAsync(account);
+        runtime.SteamLoginLastMessage = "Steam login flow completed. Config imported and listener started.";
+    }
+}
+
+void PrepareSteamLoginRuntimeForStart(ListenerRuntime runtime, string initialMessage)
+{
+    runtime.SteamLoginStatus = "launching";
+    runtime.SteamLoginIsRunning = true;
+    runtime.SteamLoginStartedAtUtc = DateTimeOffset.UtcNow;
+    runtime.SteamLoginFinishedAtUtc = null;
+    runtime.SteamLoginImportedAtUtc = null;
+    runtime.SteamLoginExitCode = null;
+    runtime.SteamLoginLastMessage = initialMessage;
+    runtime.SteamLoginRemoteLogCursor = 0;
+
+    while (runtime.SteamLoginOutput.TryDequeue(out _))
+    {
+    }
+}
+
+void ClearRemoteSteamLoginSessionState(ListenerRuntime runtime)
+{
+    runtime.SteamLoginRemoteSessionId = null;
+    runtime.SteamLoginRemoteSessionToken = null;
+    runtime.SteamLoginRemoteViewerUrl = null;
+    runtime.SteamLoginRemoteLogCursor = 0;
+}
+
+async Task DeleteRemoteSteamLoginSessionAsync(ListenerRuntime runtime)
+{
+    if (string.IsNullOrWhiteSpace(loginHandlerBaseUrl)
+        || string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionId)
+        || string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionToken))
+    {
+        ClearRemoteSteamLoginSessionState(runtime);
+        return;
+    }
+
+    try
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"{loginHandlerBaseUrl}/api/sessions/{Uri.EscapeDataString(runtime.SteamLoginRemoteSessionId)}");
+        request.Headers.Add("x-session-token", runtime.SteamLoginRemoteSessionToken);
+        using var response = await loginHandlerHttpClient.SendAsync(request);
+        if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.NotFound)
+        {
+            var errorMessage = await ReadLoginHandlerErrorMessageAsync(response);
+            AppendSteamLoginOutput(runtime, $"Remote login session cleanup failed: {errorMessage}");
+        }
+    }
+    catch (Exception ex)
+    {
+        AppendSteamLoginOutput(runtime, $"Remote login session cleanup failed: {ex.Message}");
+    }
+    finally
+    {
+        ClearRemoteSteamLoginSessionState(runtime);
+    }
+}
+
+async Task HandleRemotePairingSteamLoginStartRequestAsync(HttpListenerContext context, UserAccountRecord authenticatedUser, ListenerRuntime runtime)
+{
+    if (!string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionId))
+    {
+        await DeleteRemoteSteamLoginSessionAsync(runtime);
+    }
+
+    PrepareSteamLoginRuntimeForStart(runtime, "Allocating remote Steam login session...");
+    AppendSteamLoginOutput(runtime, $"Creating remote login session via {loginHandlerBaseUrl}");
+
+    var createResponse = await SendLoginHandlerRequestAsync<LoginHandlerCreateSessionResponse>(
+        HttpMethod.Post,
+        $"{loginHandlerBaseUrl}/api/sessions",
+        new
+        {
+            userId = authenticatedUser.Id,
+            label = authenticatedUser.Email
+        });
+
+    var session = createResponse.Session ?? throw new InvalidOperationException("Login handler did not return a session payload.");
+    if (string.IsNullOrWhiteSpace(session.Id) || string.IsNullOrWhiteSpace(session.AccessToken))
+    {
+        throw new InvalidOperationException("Login handler returned an incomplete session payload.");
+    }
+
+    runtime.SteamLoginStatus = string.Equals(session.Status, "starting", StringComparison.OrdinalIgnoreCase)
+        ? "launching"
+        : "running";
+    runtime.SteamLoginIsRunning = true;
+    runtime.SteamLoginRemoteSessionId = session.Id;
+    runtime.SteamLoginRemoteSessionToken = session.AccessToken;
+    runtime.SteamLoginRemoteViewerUrl = session.ViewerUrl;
+    runtime.SteamLoginStartedAtUtc = session.StartedAtUtc ?? runtime.SteamLoginStartedAtUtc;
+    runtime.SteamLoginLastMessage = string.IsNullOrWhiteSpace(session.LastMessage)
+        ? "Remote Steam login session is ready. Open the viewer window to continue."
+        : session.LastMessage;
+
+    AppendSteamLoginOutput(runtime, $"Remote session created: {session.Id}");
+    if (!string.IsNullOrWhiteSpace(session.ViewerUrl))
+    {
+        AppendSteamLoginOutput(runtime, $"Viewer URL: {session.ViewerUrl}");
+    }
+
+    await WriteJsonResponseAsync(context, 200, new
+    {
+        ok = true,
+        message = "Steam login flow started. Open the remote browser session to complete sign-in for this account.",
+        viewerUrl = session.ViewerUrl
+    });
+}
+
+async Task SynchronizeRemoteSteamLoginAsync(ListenerRuntime runtime)
+{
+    if (string.IsNullOrWhiteSpace(loginHandlerBaseUrl)
+        || string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionId)
+        || string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionToken))
+    {
+        return;
+    }
+
+    await runtime.SteamLoginRemoteSyncGate.WaitAsync();
+    try
+    {
+        if (string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionId)
+            || string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionToken))
+        {
+            return;
+        }
+
+        LoginHandlerSessionResponse sessionResponse;
+        try
+        {
+            sessionResponse = await SendLoginHandlerRequestAsync<LoginHandlerSessionResponse>(
+                HttpMethod.Get,
+                $"{loginHandlerBaseUrl}/api/sessions/{Uri.EscapeDataString(runtime.SteamLoginRemoteSessionId)}",
+                null,
+                runtime.SteamLoginRemoteSessionToken);
+        }
+        catch (LoginHandlerRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            runtime.SteamLoginIsRunning = false;
+            runtime.SteamLoginFinishedAtUtc ??= DateTimeOffset.UtcNow;
+            runtime.SteamLoginStatus = runtime.SteamLoginImportedAtUtc is not null ? "completed" : "failed";
+            runtime.SteamLoginLastMessage = runtime.SteamLoginImportedAtUtc is not null
+                ? "Steam login flow completed and the remote session was cleaned up."
+                : "Remote Steam login session no longer exists.";
+            ClearRemoteSteamLoginSessionState(runtime);
+            return;
+        }
+
+        var session = sessionResponse.Session ?? throw new InvalidOperationException("Login handler did not return a session payload.");
+        runtime.SteamLoginRemoteViewerUrl = session.ViewerUrl ?? runtime.SteamLoginRemoteViewerUrl;
+        runtime.SteamLoginStartedAtUtc = session.StartedAtUtc ?? runtime.SteamLoginStartedAtUtc;
+        runtime.SteamLoginFinishedAtUtc = session.CompletedAtUtc ?? runtime.SteamLoginFinishedAtUtc;
+
+        if (session.Logs is { Count: > 0 })
+        {
+            if (runtime.SteamLoginRemoteLogCursor > session.Logs.Count)
+            {
+                runtime.SteamLoginRemoteLogCursor = 0;
+            }
+
+            for (var index = runtime.SteamLoginRemoteLogCursor; index < session.Logs.Count; index += 1)
+            {
+                var logMessage = session.Logs[index].Message;
+                if (!string.IsNullOrWhiteSpace(logMessage))
+                {
+                    AppendSteamLoginOutput(runtime, logMessage);
+                }
+            }
+
+            runtime.SteamLoginRemoteLogCursor = session.Logs.Count;
+        }
+
+        runtime.SteamLoginLastMessage = string.IsNullOrWhiteSpace(session.LastMessage)
+            ? runtime.SteamLoginLastMessage
+            : session.LastMessage;
+
+        var remoteStatus = session.Status?.Trim().ToLowerInvariant();
+        runtime.SteamLoginIsRunning = remoteStatus is "starting" or "running";
+
+        if (session.ConfigAvailable && runtime.SteamLoginImportedAtUtc is null)
+        {
+            var configResponse = await SendLoginHandlerRequestAsync<LoginHandlerConfigResponse>(
+                HttpMethod.Get,
+                $"{loginHandlerBaseUrl}/api/sessions/{Uri.EscapeDataString(runtime.SteamLoginRemoteSessionId)}/config",
+                null,
+                runtime.SteamLoginRemoteSessionToken);
+
+            if (string.IsNullOrWhiteSpace(configResponse.ConfigJson))
+            {
+                throw new InvalidOperationException("Login handler reported a config file, but returned an empty payload.");
+            }
+
+            AppendSteamLoginOutput(runtime, "Importing Rust+ config from remote Steam login session.");
+            await ImportSteamLoginConfigAsync(runtime, configResponse.ConfigJson);
+            runtime.SteamLoginFinishedAtUtc ??= DateTimeOffset.UtcNow;
+            runtime.SteamLoginIsRunning = false;
+            runtime.SteamLoginStatus = "completed";
+            await DeleteRemoteSteamLoginSessionAsync(runtime);
+            return;
+        }
+
+        runtime.SteamLoginStatus = remoteStatus switch
+        {
+            "starting" => "launching",
+            "running" => "running",
+            "completed" => runtime.SteamLoginImportedAtUtc is not null ? "completed" : "waiting",
+            "failed" => "failed",
+            _ => runtime.SteamLoginStatus
+        };
+
+        if (!runtime.SteamLoginIsRunning && remoteStatus is "completed" or "failed")
+        {
+            runtime.SteamLoginFinishedAtUtc ??= DateTimeOffset.UtcNow;
+        }
+    }
+    finally
+    {
+        runtime.SteamLoginRemoteSyncGate.Release();
+    }
+}
+
+async Task<T> SendLoginHandlerRequestAsync<T>(HttpMethod method, string requestUrl, object? payload = null, string? sessionToken = null) where T : LoginHandlerResponseBase
+{
+    using var request = new HttpRequestMessage(method, requestUrl);
+    if (!string.IsNullOrWhiteSpace(sessionToken))
+    {
+        request.Headers.Add("x-session-token", sessionToken);
+    }
+
+    if (payload is not null)
+    {
+        request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+    }
+
+    using var response = await loginHandlerHttpClient.SendAsync(request);
+    var responseBody = await response.Content.ReadAsStringAsync();
+    var parsed = string.IsNullOrWhiteSpace(responseBody)
+        ? null
+        : JsonSerializer.Deserialize<T>(responseBody, caseInsensitiveJsonSerializerOptions);
+
+    if (!response.IsSuccessStatusCode)
+    {
+        throw new LoginHandlerRequestException(response.StatusCode, parsed?.Message ?? $"Login handler request failed with status {(int)response.StatusCode}.");
+    }
+
+    return parsed ?? throw new InvalidOperationException("Login handler returned an empty response.");
+}
+
+async Task<string> ReadLoginHandlerErrorMessageAsync(HttpResponseMessage response)
+{
+    var responseBody = await response.Content.ReadAsStringAsync();
+    if (string.IsNullOrWhiteSpace(responseBody))
+    {
+        return $"Login handler request failed with status {(int)response.StatusCode}.";
+    }
+
+    try
+    {
+        var parsed = JsonSerializer.Deserialize<LoginHandlerResponseBase>(responseBody, caseInsensitiveJsonSerializerOptions);
+        if (!string.IsNullOrWhiteSpace(parsed?.Message))
+        {
+            return parsed.Message;
+        }
+    }
+    catch
+    {
+    }
+
+    return responseBody;
+}
+
+ProcessStartInfo CreateSteamLoginProcessStartInfo(string workingDirectory, string configFilePath, out string launcherDescription)
+{
+    var launchInfo = CreateSteamLoginLaunchInfo(configFilePath);
+    launcherDescription = launchInfo.Description;
+
     var processStartInfo = new ProcessStartInfo
     {
         WorkingDirectory = workingDirectory,
@@ -530,27 +812,19 @@ ProcessStartInfo CreateSteamLoginProcessStartInfo(string workingDirectory, strin
         CreateNoWindow = true
     };
 
-    if (OperatingSystem.IsWindows())
+    processStartInfo.FileName = launchInfo.FileName;
+    if (!string.IsNullOrWhiteSpace(launchInfo.ArgumentsText))
     {
-        processStartInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-        processStartInfo.ArgumentList.Add("/d");
-        processStartInfo.ArgumentList.Add("/c");
-        processStartInfo.ArgumentList.Add("npx.cmd");
-    }
-    else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-    {
-        processStartInfo.FileName = "/usr/bin/env";
-        processStartInfo.ArgumentList.Add("npx");
+        processStartInfo.Arguments = launchInfo.ArgumentsText;
     }
     else
     {
-        throw new PlatformNotSupportedException("Steam login helper is currently supported on Windows, Linux, and macOS.");
+        foreach (var argument in launchInfo.Arguments)
+        {
+            processStartInfo.ArgumentList.Add(argument);
+        }
     }
 
-    processStartInfo.ArgumentList.Add("--yes");
-    processStartInfo.ArgumentList.Add("@liamcottle/rustplus.js");
-    processStartInfo.ArgumentList.Add("fcm-register");
-    processStartInfo.ArgumentList.Add($"--config-file={configFilePath}");
     return processStartInfo;
 }
 
@@ -564,7 +838,8 @@ async Task HandlePairingSteamLoginStartRequestAsync(HttpListenerContext context,
     }
 
     var runtime = GetListenerRuntime(authenticatedUser.Id);
-    if (runtime.SteamLoginProcess is not null && !runtime.SteamLoginProcess.HasExited)
+    if ((runtime.SteamLoginProcess is not null && !runtime.SteamLoginProcess.HasExited)
+        || (!string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionId) && runtime.SteamLoginIsRunning))
     {
         await WriteJsonResponseAsync(context, 409, new { ok = false, message = "Steam login flow is already running for this account." });
         return;
@@ -572,30 +847,34 @@ async Task HandlePairingSteamLoginStartRequestAsync(HttpListenerContext context,
 
     try
     {
+        if (!string.IsNullOrWhiteSpace(runtime.SteamLoginRemoteSessionId))
+        {
+            await SynchronizeRemoteSteamLoginAsync(runtime);
+            if (runtime.SteamLoginIsRunning)
+            {
+                await WriteJsonResponseAsync(context, 409, new { ok = false, message = "Steam login flow is already running for this account.", viewerUrl = runtime.SteamLoginRemoteViewerUrl });
+                return;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(loginHandlerBaseUrl))
+        {
+            await HandleRemotePairingSteamLoginStartRequestAsync(context, authenticatedUser, runtime);
+            return;
+        }
+
         Directory.CreateDirectory(runtime.DirectoryPath);
         if (File.Exists(runtime.SteamLoginConfigPath))
         {
             File.Delete(runtime.SteamLoginConfigPath);
         }
 
-        runtime.SteamLoginStatus = "launching";
-        runtime.SteamLoginIsRunning = true;
-        runtime.SteamLoginStartedAtUtc = DateTimeOffset.UtcNow;
-        runtime.SteamLoginFinishedAtUtc = null;
-        runtime.SteamLoginImportedAtUtc = null;
-        runtime.SteamLoginExitCode = null;
-        runtime.SteamLoginLastMessage = "Launching browser-based Steam sign-in helper...";
-        while (runtime.SteamLoginOutput.TryDequeue(out _))
-        {
-        }
+        PrepareSteamLoginRuntimeForStart(runtime, "Launching browser-based Steam sign-in helper...");
 
         AppendSteamLoginOutput(runtime, $"Starting helper from {appRootPath}");
         AppendSteamLoginOutput(runtime, $"Config target: {runtime.SteamLoginConfigPath}");
-        AppendSteamLoginOutput(runtime, OperatingSystem.IsWindows()
-            ? "Using Windows npx.cmd helper launcher."
-            : "Using POSIX npx helper launcher.");
-
-        var processStartInfo = CreateSteamLoginProcessStartInfo(appRootPath, runtime.SteamLoginConfigPath);
+        var processStartInfo = CreateSteamLoginProcessStartInfo(appRootPath, runtime.SteamLoginConfigPath, out var launcherDescription);
+        AppendSteamLoginOutput(runtime, $"Resolved helper launcher: {launcherDescription}");
 
         var process = new Process
         {
@@ -653,7 +932,7 @@ async Task HandlePairingSteamLoginStartRequestAsync(HttpListenerContext context,
     {
         runtime.SteamLoginIsRunning = false;
         runtime.SteamLoginStatus = "failed";
-        runtime.SteamLoginLastMessage = "Unable to start the Steam login helper. Ensure Node.js/npm is installed, `npx` is on PATH, and the Ubuntu session can open a browser.";
+        runtime.SteamLoginLastMessage = "Unable to start the Steam login helper. Ensure Node.js/npm is installed, either `npx` or `npm` is on PATH, and the Ubuntu session can open a browser.";
         AppendSteamLoginOutput(runtime, ex.Message);
         await WriteJsonResponseAsync(context, 500, new { ok = false, message = runtime.SteamLoginLastMessage });
     }
@@ -1121,6 +1400,7 @@ async Task HandlePairingStatusRequestAsync(HttpListenerContext context, UserAcco
     }
 
     var runtime = GetListenerRuntime(authenticatedUser.Id);
+    await SynchronizeRemoteSteamLoginAsync(runtime);
 
     await WriteJsonResponseAsync(context, 200, new
     {
@@ -1136,6 +1416,7 @@ async Task HandlePairingStatusRequestAsync(HttpListenerContext context, UserAcco
             importedAtUtc = runtime.SteamLoginImportedAtUtc,
             exitCode = runtime.SteamLoginExitCode,
             lastMessage = runtime.SteamLoginLastMessage,
+            viewerUrl = runtime.SteamLoginRemoteViewerUrl,
             recentOutput = runtime.SteamLoginOutput.ToArray()
         },
         hasServerPairing = runtime.LatestServerPairing?.Data is not null,
@@ -1213,6 +1494,7 @@ async Task HandlePairingConfigRequestAsync(HttpListenerContext context, UserAcco
         userRuntime.SteamLoginImportedAtUtc = null;
         userRuntime.SteamLoginExitCode = null;
         userRuntime.SteamLoginLastMessage = "Steam login removed for this account.";
+        await DeleteRemoteSteamLoginSessionAsync(userRuntime);
         while (userRuntime.SteamLoginOutput.TryDequeue(out _))
         {
         }
@@ -1965,10 +2247,7 @@ async Task HandleSwitchStateRequestAsync(HttpListenerContext context)
     SwitchStateRequest? request;
     try
     {
-        request = JsonSerializer.Deserialize<SwitchStateRequest>(requestBody, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        });
+        request = JsonSerializer.Deserialize<SwitchStateRequest>(requestBody, caseInsensitiveJsonSerializerOptions);
     }
     catch
     {
@@ -2189,10 +2468,7 @@ async Task<T?> ReadJsonRequestAsync<T>(HttpListenerContext context) where T : cl
 
     try
     {
-        return JsonSerializer.Deserialize<T>(requestBody, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        });
+        return JsonSerializer.Deserialize<T>(requestBody, caseInsensitiveJsonSerializerOptions);
     }
     catch
     {
@@ -2282,6 +2558,135 @@ static string GetEnvironmentVariableOrDefault(string variableName, string defaul
     return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
 }
 
+static (string FileName, string[] Arguments, string? ArgumentsText, string Description) CreateSteamLoginLaunchInfo(string configFilePath)
+{
+    var helperArguments = new[]
+    {
+        "--yes",
+        "@liamcottle/rustplus.js",
+        "fcm-register",
+        $"--config-file={configFilePath}"
+    };
+
+    if (OperatingSystem.IsWindows())
+    {
+        var commandShell = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+        var npxPath = FindCommandOnPath("npx.cmd");
+        if (!string.IsNullOrWhiteSpace(npxPath))
+        {
+            var commandLine = BuildWindowsCommandLine([npxPath, .. helperArguments]);
+            return (
+                commandShell,
+                [],
+                $"/d /s /c \"{commandLine}\"",
+                $"{npxPath} --yes @liamcottle/rustplus.js fcm-register");
+        }
+
+        var npmPath = FindCommandOnPath("npm.cmd");
+        if (!string.IsNullOrWhiteSpace(npmPath))
+        {
+            var commandLine = BuildWindowsCommandLine([npmPath, "exec", "--yes", "--package=@liamcottle/rustplus.js", "--", "rustplus.js", "fcm-register", $"--config-file={configFilePath}"]);
+            return (
+                commandShell,
+                [],
+                $"/d /s /c \"{commandLine}\"",
+                $"{npmPath} exec --yes --package=@liamcottle/rustplus.js -- rustplus.js fcm-register");
+        }
+    }
+    else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+    {
+        var npxPath = FindCommandOnPath("npx");
+        if (!string.IsNullOrWhiteSpace(npxPath))
+        {
+            return (
+                npxPath,
+                helperArguments,
+                null,
+                $"{npxPath} --yes @liamcottle/rustplus.js fcm-register");
+        }
+
+        var npmPath = FindCommandOnPath("npm");
+        if (!string.IsNullOrWhiteSpace(npmPath))
+        {
+            return (
+                npmPath,
+                ["exec", "--yes", "--package=@liamcottle/rustplus.js", "--", "rustplus.js", "fcm-register", $"--config-file={configFilePath}"],
+                null,
+                $"{npmPath} exec --yes --package=@liamcottle/rustplus.js -- rustplus.js fcm-register");
+        }
+    }
+    else
+    {
+        throw new PlatformNotSupportedException("Steam login helper is currently supported on Windows, Linux, and macOS.");
+    }
+
+    throw new FileNotFoundException("Unable to start the Steam login helper. Install Node.js/npm and ensure `npx` or `npm` is available on PATH for the account running this app.");
+}
+
+static string BuildWindowsCommandLine(IEnumerable<string> arguments)
+{
+    return string.Join(" ", arguments.Select(QuoteWindowsCommandArgument));
+}
+
+static string QuoteWindowsCommandArgument(string value)
+{
+    if (string.IsNullOrEmpty(value))
+    {
+        return "\"\"";
+    }
+
+    return value.IndexOfAny([' ', '\t', '"']) >= 0
+        ? $"\"{value.Replace("\"", "\\\"")}\""
+        : value;
+}
+
+static string? FindCommandOnPath(string commandName)
+{
+    if (string.IsNullOrWhiteSpace(commandName))
+    {
+        return null;
+    }
+
+    if (Path.IsPathRooted(commandName) && File.Exists(commandName))
+    {
+        return commandName;
+    }
+
+    var pathValue = Environment.GetEnvironmentVariable("PATH");
+    if (string.IsNullOrWhiteSpace(pathValue))
+    {
+        return null;
+    }
+
+    var candidateNames = OperatingSystem.IsWindows() && !Path.HasExtension(commandName)
+        ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(extension => commandName.EndsWith(extension, StringComparison.OrdinalIgnoreCase) ? commandName : $"{commandName}{extension}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray()
+        : [commandName];
+
+    foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        var trimmedDirectory = directory.Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(trimmedDirectory))
+        {
+            continue;
+        }
+
+        foreach (var candidateName in candidateNames)
+        {
+            var candidatePath = Path.Combine(trimmedDirectory, candidateName);
+            if (File.Exists(candidatePath))
+            {
+                return candidatePath;
+            }
+        }
+    }
+
+    return null;
+}
+
 static string[] GetWebPrefixes()
 {
     var configuredPrefixes = Environment.GetEnvironmentVariable("RUSTPLUS_WEB_PREFIXES");
@@ -2299,6 +2704,13 @@ static string[] GetWebPrefixes()
     }
 
     return [GetEnvironmentVariableOrDefault("RUSTPLUS_WEB_PREFIX", "http://localhost:5057/")];
+}
+
+static string? NormalizeOptionalBaseUrl(string? value)
+{
+    return string.IsNullOrWhiteSpace(value)
+        ? null
+        : value.Trim().TrimEnd('/');
 }
 
 static bool TryNormalizeEmail(string? email, out string normalizedEmail)
@@ -3981,7 +4393,66 @@ file sealed class ListenerRuntime
     public DateTimeOffset? SteamLoginImportedAtUtc { get; set; }
     public int? SteamLoginExitCode { get; set; }
     public string? SteamLoginLastMessage { get; set; }
+    public string? SteamLoginRemoteSessionId { get; set; }
+    public string? SteamLoginRemoteSessionToken { get; set; }
+    public string? SteamLoginRemoteViewerUrl { get; set; }
+    public int SteamLoginRemoteLogCursor { get; set; }
+    public SemaphoreSlim SteamLoginRemoteSyncGate { get; } = new(1, 1);
     public ConcurrentQueue<SteamLoginOutputEntry> SteamLoginOutput { get; } = new();
+}
+
+file class LoginHandlerResponseBase
+{
+    public bool Ok { get; set; }
+    public string? Message { get; set; }
+}
+
+file sealed class LoginHandlerCreateSessionResponse : LoginHandlerResponseBase
+{
+    public LoginHandlerSessionDto? Session { get; set; }
+}
+
+file sealed class LoginHandlerSessionResponse : LoginHandlerResponseBase
+{
+    public LoginHandlerSessionDto? Session { get; set; }
+}
+
+file sealed class LoginHandlerConfigResponse : LoginHandlerResponseBase
+{
+    public string? ConfigJson { get; set; }
+}
+
+file sealed class LoginHandlerSessionDto
+{
+    public string? Id { get; set; }
+    public string? UserId { get; set; }
+    public string? Label { get; set; }
+    public string? Status { get; set; }
+    public DateTimeOffset? CreatedAtUtc { get; set; }
+    public DateTimeOffset? StartedAtUtc { get; set; }
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public string? LastMessage { get; set; }
+    public string? ViewerUrl { get; set; }
+    public string? AccessToken { get; set; }
+    public bool ConfigAvailable { get; set; }
+    public List<LoginHandlerLogEntry>? Logs { get; set; }
+}
+
+file sealed class LoginHandlerLogEntry
+{
+    public DateTimeOffset? OccurredAtUtc { get; set; }
+    public string? Message { get; set; }
+}
+
+file sealed class LoginHandlerRequestException : Exception
+{
+    public LoginHandlerRequestException(HttpStatusCode statusCode, string message)
+        : base(message)
+    {
+        StatusCode = statusCode;
+    }
+
+    public HttpStatusCode StatusCode { get; }
 }
 
 file sealed class LatestEntityPairingState

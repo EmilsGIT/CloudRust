@@ -68,13 +68,6 @@ body.auth-locked {
   line-height: 1.5;
 }
 
-.auth-mode-switch {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 18px;
-}
-
 .auth-mode-button {
   padding: 10px 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -95,8 +88,16 @@ body.auth-locked {
   margin-top: 18px;
 }
 
+.auth-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
 .auth-submit-button {
   width: 100%;
+  min-width: 0;
 }
 
 .auth-status {

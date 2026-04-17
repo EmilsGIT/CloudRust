@@ -1,13 +1,13 @@
 {
   "fcm_credentials": {
     "gcm": {
-      "androidId": "4801369107078210487",
-      "securityToken": "8197784268817956250"
+      "androidId": "5447715351409449668",
+      "securityToken": "3546015122207730875"
     },
     "fcm": {
-      "token": "cRV_QI9FIV8:APA91bEu2QIzwNalpHijC6Yu641RkYewxU9tNuVjxmqDCLCVfWW9fStLAZ3vQbeyu7fR4XENB7rkW9srBRA0FCz49kwhah1FzEvoDQsh8VLj-ixw4j2asDI"
+      "token": "eIvgRhUG9qM:APA91bHtkx_LQUAVNm-Gk4V3yRDWI8nA9lXjHZN0BS_mA-TUffO7ryH3Fpbq25aDvHv7lEZrjY1_rkKA1C5Xlvgzlut1Q3Z1CDFRo2s3an5EEDn0DzzeGFM"
     }
   },
-  "expo_push_token": "ExponentPushToken[PtJxemJ0Svb7f_MmJtBLlc]",
-  "rustplus_auth_token": "eyJzdGVhbUlkIjoiNzY1NjExOTgwNzg2Njc1NzYiLCJ2ZXJzaW9uIjowLCJpc3MiOjE3NzU1ODY0NjksImV4cCI6MTc3Njc5NjA2OX0=.LGJ1Jw6XkBnGVGFf/O+Y2Bd3Q6OJ9gSWPN08joxiGmXSAZX0axZJ/GQAcBNCkAWFCn/cBthtHuoM6/2F5tfKDA=="
+  "expo_push_token": "ExponentPushToken[_BJO4hBXAmUwtEE_zr3bII]",
+  "rustplus_auth_token": "eyJzdGVhbUlkIjoiNzY1NjExOTgwNzg2Njc1NzYiLCJ2ZXJzaW9uIjowLCJpc3MiOjE3NzYzNTMzNjYsImV4cCI6MTc3NzU2Mjk2Nn0=.h/vsgTImZT3vgHZJmRDMKwB0HH9e9CmWuM4/Dv5Oumx0nNlK+ZHwdjF0UXzZ7giLjK6BQ4x7srjtnRWxDRWICA=="
 }

@@ -10,13 +10,8 @@
   <div id="authShell" class="auth-shell is-loading">
     <section class="auth-panel" aria-live="polite" aria-labelledby="authTitle">
       <p class="auth-eyebrow">RustPlus Web UI</p>
-      <h1 id="authTitle" class="auth-title">Private session login</h1>
-      <p id="authDescription" class="auth-copy">Create an account or sign in to keep your switches, monitors, virtual wiring, and My System layout on the backend instead of in the browser.</p>
-
-      <div class="auth-mode-switch" role="tablist" aria-label="Authentication mode">
-        <button id="authModeLoginButton" class="auth-mode-button is-active" type="button">Log In</button>
-        <button id="authModeSignupButton" class="auth-mode-button" type="button">Sign Up</button>
-      </div>
+      <h1 id="authTitle" class="auth-title"></h1>
+      <p id="authDescription" class="auth-copy"></p>
 
       <form id="authForm" class="auth-form" novalidate>
         <label class="field">
@@ -34,7 +29,11 @@
           <input id="authConfirmInput" name="confirmPassword" type="password" class="pairing-name-input" autocomplete="new-password" placeholder="Re-enter password" />
         </label>
 
-        <button id="authSubmitButton" class="ok-button auth-submit-button" type="submit">Log In</button>
+        <div class="auth-action-row" role="group" aria-label="Authentication actions">
+          <button id="authSubmitButton" class="ok-button auth-submit-button" type="submit">Log In</button>
+          <button id="authModeLoginButton" class="auth-mode-button" type="button" hidden>Log In</button>
+          <button id="authModeSignupButton" class="auth-mode-button" type="button">Sign Up</button>
+        </div>
       </form>
 
       <p id="authStatus" class="auth-status">Checking session...</p>
@@ -92,6 +91,7 @@
             <section id="pairingSteamStateCard" class="pairing-state-card" data-state="waiting">
               <p class="pairing-state-label">Steam Login</p>
               <button id="pairingSteamLoginButton" class="pairing-state-button" data-state="waiting" type="button">Run Steam Login Flow</button>
+              <button id="pairingSteamViewerButton" class="pairing-state-secondary-button" type="button" hidden>Open Remote Session</button>
               <button id="pairingSteamLogoutButton" class="pairing-state-secondary-button" type="button" hidden>Log Out of Steam</button>
               <p id="pairingHelperStatus" class="info-footnote">Run the helper to connect your Steam account for this backend user.</p>
             </section>
@@ -768,6 +768,7 @@
     const pairingServerHelpText = document.getElementById('pairingServerHelpText');
     const pairingHelperStatus = document.getElementById('pairingHelperStatus');
     const pairingSteamLoginButton = document.getElementById('pairingSteamLoginButton');
+    const pairingSteamViewerButton = document.getElementById('pairingSteamViewerButton');
     const pairingSteamLogoutButton = document.getElementById('pairingSteamLogoutButton');
     const pairingSaveButton = document.getElementById('pairingSaveButton');
     const pairingSaveStartButton = document.getElementById('pairingSaveStartButton');
@@ -935,6 +936,12 @@
       authMode = nextMode === 'signup' ? 'signup' : 'login';
       authModeLoginButton?.classList.toggle('is-active', authMode === 'login');
       authModeSignupButton?.classList.toggle('is-active', authMode === 'signup');
+      if (authModeLoginButton) {
+        authModeLoginButton.hidden = authMode === 'login';
+      }
+      if (authModeSignupButton) {
+        authModeSignupButton.hidden = authMode === 'signup';
+      }
       if (authConfirmField) {
         authConfirmField.hidden = authMode !== 'signup';
         authConfirmField.style.display = authMode === 'signup' ? '' : 'none';
@@ -1276,7 +1283,7 @@
     }
 
     function renderPairingStatus() {
-      if (!pairingStatusText || !pairingSteamStateCard || !pairingServerStateCard || !pairingServerStatus || !pairingServerHelpText || !pairingHelperStatus || !pairingSteamLoginButton || !pairingSteamLogoutButton) {
+      if (!pairingStatusText || !pairingSteamStateCard || !pairingServerStateCard || !pairingServerStatus || !pairingServerHelpText || !pairingHelperStatus || !pairingSteamLoginButton || !pairingSteamViewerButton || !pairingSteamLogoutButton) {
         return;
       }
 
@@ -1286,6 +1293,8 @@
         pairingSteamLoginButton.dataset.state = 'waiting';
         pairingSteamLoginButton.textContent = 'Run Steam Login Flow';
         pairingSteamLoginButton.disabled = true;
+        pairingSteamViewerButton.hidden = true;
+        pairingSteamViewerButton.disabled = true;
         pairingSteamLogoutButton.hidden = true;
         pairingSteamLogoutButton.disabled = true;
         pairingServerStatus.dataset.state = 'waiting';
@@ -1302,6 +1311,8 @@
       const listenerConnected = Boolean(snapshot.listenerConnected);
       const hasServerPairing = Boolean(snapshot.hasServerPairing);
       const steamLoginRunning = Boolean(steamLogin.isRunning);
+      const steamLoginViewerUrl = typeof steamLogin.viewerUrl === 'string' ? steamLogin.viewerUrl : '';
+      const canOpenSteamLoginViewer = steamLoginRunning && Boolean(steamLoginViewerUrl);
       const steamDisplayName = getPairingSteamDisplayName();
       const steamState = steamLoginRunning ? 'running' : hasConfig ? 'ready' : 'waiting';
       const serverState = hasServerPairing ? 'ready' : listenerConnected ? 'waiting' : hasConfig ? 'running' : 'waiting';
@@ -1310,6 +1321,8 @@
       pairingServerStateCard.dataset.state = serverState;
       pairingSteamLoginButton.dataset.state = steamState;
       pairingSteamLoginButton.disabled = steamLoginRunning;
+      pairingSteamViewerButton.hidden = !canOpenSteamLoginViewer;
+      pairingSteamViewerButton.disabled = !canOpenSteamLoginViewer;
       pairingSteamLogoutButton.hidden = !hasConfig;
       pairingSteamLogoutButton.disabled = steamLoginRunning || !hasConfig;
       pairingServerStatus.dataset.state = hasServerPairing ? 'ready' : 'waiting';
@@ -1330,7 +1343,9 @@
         pairingServerStatus.textContent = 'Waiting for server pairing';
       }
 
-      if (steamLoginRunning) {
+      if (canOpenSteamLoginViewer) {
+        pairingStatusText.textContent = 'Complete the Steam sign-in flow in the remote browser session.';
+      } else if (steamLoginRunning) {
         pairingStatusText.textContent = 'Complete the Steam sign-in flow in the Chrome window that just opened.';
       } else if (hasServerPairing) {
         pairingStatusText.textContent = 'Steam login and server pairing are both ready.';
@@ -1343,7 +1358,9 @@
       }
 
       pairingHelperStatus.textContent = steamLogin.lastMessage
-        || (steamLoginRunning
+        || (canOpenSteamLoginViewer
+          ? 'Remote browser session is active. Click the button again to reopen it if needed.'
+          : steamLoginRunning
           ? 'Chrome is open. Finish the Steam sign-in flow there.'
           : steamDisplayName
             ? `Steam login is linked for ${steamDisplayName}. Click again if you want to refresh the linked Steam session.`
@@ -1526,21 +1543,52 @@
         return;
       }
 
+      const existingViewerUrl = typeof pairingStatusSnapshot?.steamLogin?.viewerUrl === 'string'
+        ? pairingStatusSnapshot.steamLogin.viewerUrl
+        : '';
+      const existingSessionRunning = Boolean(pairingStatusSnapshot?.steamLogin?.isRunning);
+      if (existingSessionRunning && existingViewerUrl) {
+        const reopened = openPairingSteamLoginViewer(existingViewerUrl);
+        if (pairingStatusText) {
+          pairingStatusText.textContent = reopened
+            ? 'Remote Steam login session opened in a new tab.'
+            : 'Steam login session is already active. Use the remote-session button and allow popups if the tab does not open.';
+        }
+        return;
+      }
+
       if (pairingStatusText) {
         pairingStatusText.textContent = 'Launching Steam login helper...';
       }
 
       try {
-        await fetchJson('/api/pairing/steam-login/start', {
+        const payload = await fetchJson('/api/pairing/steam-login/start', {
           method: 'POST'
         });
         ensurePairingStatusPoll();
-        await loadPairingStatus('Chrome launched. Complete the Steam sign-in flow in the helper window.');
+        const viewerUrl = typeof payload?.viewerUrl === 'string' ? payload.viewerUrl : '';
+        if (viewerUrl) {
+          const opened = openPairingSteamLoginViewer(viewerUrl);
+          await loadPairingStatus(opened
+            ? 'Remote Steam login session opened in a new tab.'
+            : 'Steam login session is ready, but the browser blocked the popup. Click the button again to open it.');
+        } else {
+          await loadPairingStatus('Chrome launched. Complete the Steam sign-in flow in the helper window.');
+        }
       } catch (error) {
         if (pairingStatusText) {
           pairingStatusText.textContent = error.message;
         }
       }
+    }
+
+    function openPairingSteamLoginViewer(viewerUrl) {
+      if (!viewerUrl) {
+        return false;
+      }
+
+      const popup = window.open(viewerUrl, '_blank', 'noopener');
+      return Boolean(popup);
     }
 
     async function logOutPairingSteamAccount() {
@@ -2000,7 +2048,7 @@
       } catch {
         applySignedOutState();
         if (authStatus) {
-          authStatus.textContent = 'Sign in to load your saved backend session.';
+          authStatus.textContent = '';
         }
       }
     }
@@ -5104,6 +5152,17 @@
     });
     pairingSteamLoginButton?.addEventListener('click', () => {
       runPairingSteamLoginFlow();
+    });
+    pairingSteamViewerButton?.addEventListener('click', () => {
+      const viewerUrl = typeof pairingStatusSnapshot?.steamLogin?.viewerUrl === 'string'
+        ? pairingStatusSnapshot.steamLogin.viewerUrl
+        : '';
+      const opened = openPairingSteamLoginViewer(viewerUrl);
+      if (pairingStatusText) {
+        pairingStatusText.textContent = opened
+          ? 'Remote Steam login session opened in a new tab.'
+          : 'The browser blocked the remote session popup. Allow popups and try again.';
+      }
     });
     pairingSteamLogoutButton?.addEventListener('click', () => {
       logOutPairingSteamAccount();
