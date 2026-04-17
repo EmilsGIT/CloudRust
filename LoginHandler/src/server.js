@@ -10,12 +10,11 @@ const { randomUUID, randomBytes } = require('crypto');
 const { spawn } = require('child_process');
 const { createProxyServer } = require('http-proxy');
 
-const noVncRoot = path.dirname(require.resolve('@novnc/novnc/package.json'));
-
 const port = Number(process.env.PORT || 6061);
 const dataRoot = path.resolve(process.env.LOGIN_HANDLER_DATA_ROOT || path.join(process.cwd(), 'data'));
 const sessionsRoot = path.join(dataRoot, 'sessions');
 const publicBaseUrl = (process.env.LOGIN_HANDLER_PUBLIC_BASE_URL || `http://localhost:${port}`).replace(/\/$/, '');
+const hostedViewerBaseUrl = (process.env.LOGIN_HANDLER_VNC_VIEWER_URL || 'https://novnc.com/noVNC/vnc.html').replace(/\/$/, '');
 const helperPackage = process.env.LOGIN_HANDLER_HELPER_PACKAGE || '@liamcottle/rustplus.js';
 const helperSubcommand = process.env.LOGIN_HANDLER_HELPER_SUBCOMMAND || 'fcm-register';
 const sessionTimeoutMs = Number(process.env.LOGIN_HANDLER_SESSION_TIMEOUT_MS || 15 * 60 * 1000);
@@ -34,7 +33,6 @@ proxy.on('error', (error, req, socket) => {
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
-app.use('/novnc', express.static(noVncRoot));
 
 app.get('/', (_req, res) => {
   res.type('html').send(`<!doctype html>
@@ -132,8 +130,7 @@ app.get('/sessions/:sessionId/view', (req, res) => {
     return;
   }
 
-  const encodedPath = encodeURIComponent(`api/sessions/${session.id}/websockify?token=${session.accessToken}`);
-  res.redirect(`/novnc/vnc.html?autoconnect=1&resize=scale&path=${encodedPath}`);
+  res.redirect(buildViewerRedirectUrl(session));
 });
 
 const server = http.createServer(app);
@@ -443,6 +440,22 @@ function serializeSession(session, options = {}) {
     configAvailable: Boolean(session.configJson),
     logs: includeLogs ? session.logs : undefined
   };
+}
+
+function buildViewerRedirectUrl(session) {
+  const baseUrl = new URL(publicBaseUrl);
+  const viewerUrl = new URL(hostedViewerBaseUrl);
+  const isSecure = baseUrl.protocol === 'https:';
+  const defaultPort = isSecure ? '443' : '80';
+
+  viewerUrl.searchParams.set('autoconnect', '1');
+  viewerUrl.searchParams.set('resize', 'scale');
+  viewerUrl.searchParams.set('host', baseUrl.hostname);
+  viewerUrl.searchParams.set('port', baseUrl.port || defaultPort);
+  viewerUrl.searchParams.set('encrypt', isSecure ? '1' : '0');
+  viewerUrl.searchParams.set('path', `api/sessions/${session.id}/websockify?token=${session.accessToken}`);
+
+  return viewerUrl.toString();
 }
 
 function appendLog(session, message) {
