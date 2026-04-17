@@ -802,9 +802,13 @@ body.auth-locked {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
   user-select: none;
   pointer-events: none;
   overflow: hidden;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .pairing-id-input::before {
@@ -817,11 +821,13 @@ body.auth-locked {
 .pairing-id-input[data-pairing-state="waiting"] {
   border-color: #caa23a;
   background: #574619;
+  color: #f2d98b;
 }
 
 .pairing-id-input[data-pairing-state="paired"] {
   border-color: #4da66b;
   background: #1f4a2d;
+  color: #d7f6e1;
 }
 
 .pairing-id-input[data-pairing-state="paired"]::before {

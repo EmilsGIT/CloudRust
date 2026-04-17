@@ -503,9 +503,7 @@
           if (switchIdInput) {
             switchIdInput.value = entityId || '';
           }
-          if (switchPairStatusInput) {
-            switchPairStatusInput.dataset.pairingState = entityId ? 'paired' : 'waiting';
-          }
+          renderPairingStatusField(switchPairStatusInput, entityId, 'Awaiting in-game pairing');
           if (switchNameInput) {
             switchNameInput.dataset.pairingState = switchNameInput.value.trim() ? 'paired' : 'waiting';
           }
@@ -521,9 +519,7 @@
           if (monitorIdInput) {
             monitorIdInput.value = entityId || '';
           }
-          if (monitorPairStatusInput) {
-            monitorPairStatusInput.dataset.pairingState = entityId ? 'paired' : 'waiting';
-          }
+          renderPairingStatusField(monitorPairStatusInput, entityId, 'Awaiting in-game pairing');
           if (monitorNameInput) {
             monitorNameInput.dataset.pairingState = monitorNameInput.value.trim() ? 'paired' : 'waiting';
           }
@@ -855,6 +851,23 @@
       mapDebugToggle.checked = true;
     }
 
+    function renderPairingStatusField(statusElement, entityId, waitingLabel) {
+      if (!statusElement) {
+        return;
+      }
+
+      const normalizedEntityId = typeof entityId === 'string'
+        ? entityId.trim()
+        : entityId === null || entityId === undefined
+          ? ''
+          : String(entityId);
+      const hasPairing = normalizedEntityId.length > 0;
+
+      statusElement.dataset.pairingState = hasPairing ? 'paired' : 'waiting';
+      statusElement.textContent = hasPairing ? normalizedEntityId : waitingLabel;
+      statusElement.title = hasPairing ? normalizedEntityId : waitingLabel;
+    }
+
     function activeIndicator() {
       return '<span class="status-indicator"><span class="status-dot" title="Active"></span><span class="status-text">Active</span></span>';
     }
@@ -983,10 +996,13 @@
 
       if (adminTabButton) {
         adminTabButton.hidden = !authenticatedUser?.isAdmin;
+        adminTabButton.style.display = authenticatedUser?.isAdmin ? '' : 'none';
+        adminTabButton.setAttribute('aria-hidden', authenticatedUser?.isAdmin ? 'false' : 'true');
       }
 
       if (adminPanel) {
         adminPanel.hidden = !authenticatedUser?.isAdmin;
+        adminPanel.style.display = authenticatedUser?.isAdmin ? '' : 'none';
       }
 
       if (pairingTabButton) {
@@ -1975,9 +1991,20 @@
       runBootTask(() => scheduleRenderMonitorLinkLines());
     }
 
+    function normalizeAuthenticatedUser(user) {
+      if (!user || typeof user !== 'object') {
+        return null;
+      }
+
+      return {
+        ...user,
+        isAdmin: user.isAdmin === true || user.isAdmin === 'true'
+      };
+    }
+
     async function applyAuthenticatedSession(user) {
-      authenticatedUser = user;
-      window.__rustplusAuthState = user;
+      authenticatedUser = normalizeAuthenticatedUser(user);
+      window.__rustplusAuthState = authenticatedUser;
       remoteStorageReady = false;
       remoteStorageValues = {};
       adminSnapshot = null;
@@ -2099,7 +2126,7 @@
         if (authForm) {
           authForm.reset();
         }
-        if (payload.user?.isAdmin) {
+        if (authenticatedUser?.isAdmin) {
           setActiveTab('admin');
         }
       } catch (error) {
@@ -4769,9 +4796,7 @@
       const hasPairing = Boolean(switchIdInput?.value?.trim());
       const hasName = Boolean(switchNameInput?.value?.trim());
 
-      if (switchPairStatusInput) {
-        switchPairStatusInput.dataset.pairingState = hasPairing ? 'paired' : 'waiting';
-      }
+      renderPairingStatusField(switchPairStatusInput, switchIdInput?.value ?? '', 'Awaiting in-game pairing');
 
       if (switchNameInput) {
         switchNameInput.dataset.pairingState = hasName ? 'paired' : 'waiting';
@@ -4810,9 +4835,7 @@
       const hasPairing = Boolean(monitorIdInput?.value?.trim());
       const hasName = Boolean(monitorNameInput?.value?.trim());
 
-      if (monitorPairStatusInput) {
-        monitorPairStatusInput.dataset.pairingState = hasPairing ? 'paired' : 'waiting';
-      }
+      renderPairingStatusField(monitorPairStatusInput, monitorIdInput?.value ?? '', 'Awaiting in-game pairing');
 
       if (monitorNameInput) {
         monitorNameInput.dataset.pairingState = hasName ? 'paired' : 'waiting';
@@ -4827,9 +4850,7 @@
       if (switchIdInput) {
         switchIdInput.value = '';
       }
-      if (switchPairStatusInput) {
-        switchPairStatusInput.dataset.pairingState = 'waiting';
-      }
+      renderPairingStatusField(switchPairStatusInput, '', 'Awaiting in-game pairing');
       if (fcmStatus) {
         fcmStatus.textContent = '';
       }
@@ -4840,9 +4861,7 @@
       if (monitorIdInput) {
         monitorIdInput.value = '';
       }
-      if (monitorPairStatusInput) {
-        monitorPairStatusInput.dataset.pairingState = 'waiting';
-      }
+      renderPairingStatusField(monitorPairStatusInput, '', 'Awaiting in-game pairing');
       if (monitorFcmStatus) {
         monitorFcmStatus.textContent = '';
       }
@@ -4854,10 +4873,7 @@
         return;
       }
 
-      switchIdInput.value = String(entityId);
-      if (fcmStatus) {
-        fcmStatus.textContent = 'Smart switch paired. Ready to add.';
-      }
+      syncSwitchPairingUi(String(entityId), 'Smart switch paired. Ready to add.');
       window.__rustplusLiveObserver?.recordEvent('smart-switch-pairing', {
         entityId,
         detail: 'Main pairing handler updated the switch form.',
@@ -4872,10 +4888,7 @@
         return;
       }
 
-      monitorIdInput.value = String(entityId);
-      if (monitorFcmStatus) {
-        monitorFcmStatus.textContent = 'Storage monitor paired. Ready to add.';
-      }
+      syncMonitorPairingUi(String(entityId), 'Storage monitor paired. Ready to add.');
       window.__rustplusLiveObserver?.recordEvent('storage-monitor-pairing', {
         entityId,
         detail: 'Main pairing handler updated the monitor form.',
