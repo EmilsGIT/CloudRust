@@ -30,6 +30,43 @@ Feel free to **explore** the `samples/` folder to see how to **use** the API.
 
 - [.NET 8](https://learn.microsoft.com/en-us/dotnet/core/whats-new/dotnet-8) or later
 
+## RustPlus Web Premium Billing
+
+The RustPlus Web sample now includes a Buy Premium tab for a recurring `6 EUR / 30 day` VIP subscription.
+
+To enable checkout providers, set the relevant environment variables before starting `samples/RustPlus.Fcm.ConsoleApp`:
+
+- `RUSTPLUS_STRIPE_PUBLISHABLE_KEY`: Optional for the current flow, but available for future client-side Stripe work.
+- `RUSTPLUS_STRIPE_SECRET_KEY`: Enables Stripe checkout session creation.
+- `RUSTPLUS_STRIPE_WEBHOOK_SECRET`: Enables Stripe webhook signature verification for subscription cancellation / reactivation updates.
+- `RUSTPLUS_PAYPAL_CLIENT_ID`: PayPal REST app client id.
+- `RUSTPLUS_PAYPAL_CLIENT_SECRET`: PayPal REST app client secret.
+- `RUSTPLUS_PAYPAL_PLAN_ID`: PayPal billing plan id for the `6 EUR / month` subscription.
+- `RUSTPLUS_PAYPAL_ENV`: Optional. Use `live` for production, otherwise sandbox is used.
+
+Local configuration:
+
+- The sample now loads `.env.local` and `.env` automatically, searching upward from the runtime directory.
+- `.env.local` is git-ignored and is the recommended place for machine-local secrets during development.
+
+Notes:
+
+- Stripe pricing is created dynamically in code for `EUR 6.00 / month`.
+- PayPal requires a pre-created monthly billing plan in your PayPal account.
+- After a successful provider return, the backend marks the signed-in user account as `IsVip = true`.
+- Stripe webhook updates can also revoke VIP automatically when the subscription becomes `canceled`, `paused`, `unpaid`, or `incomplete_expired`.
+
+Stripe webhook setup:
+
+- Create a Stripe webhook endpoint pointing to `/api/billing/webhooks/stripe` on the host where this app runs.
+- For local development, the endpoint is `http://localhost:5057/api/billing/webhooks/stripe` if you are tunneling Stripe events into your machine.
+- Subscribe to at least these events:
+    `checkout.session.completed`
+    `customer.subscription.updated`
+    `customer.subscription.deleted`
+    `customer.subscription.paused`
+- Copy the Stripe signing secret into `RUSTPLUS_STRIPE_WEBHOOK_SECRET`.
+
 ## Summary
 
 - [RustPlusApi](#rustplusapi)

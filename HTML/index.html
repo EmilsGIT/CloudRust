@@ -15,8 +15,13 @@
 
       <form id="authForm" class="auth-form" novalidate>
         <label class="field">
-          <span>Email or Username</span>
+          <span id="authEmailLabel">Email or Username</span>
           <input id="authEmailInput" name="email" type="text" class="pairing-name-input" autocomplete="username" placeholder="you@example.com or admin" required />
+        </label>
+
+        <label id="authUsernameField" class="field" hidden>
+          <span>Username</span>
+          <input id="authUsernameInput" name="username" type="text" class="pairing-name-input" autocomplete="username" placeholder="Pick a username" />
         </label>
 
         <label class="field">
@@ -44,43 +49,22 @@
     <aside class="sidebar">
       <p id="authSessionLabel" class="sidebar-session-label">Signed out</p>
       <nav class="tab-list" aria-label="Main navigation">        
-        <button class="tab active" type="button" data-tab="info">Server Info</button>
-        <button id="pairingTabButton" class="tab" type="button" data-tab="pairing">Pairing</button>
+        <button id="pairingTabButton" class="tab active" type="button" data-tab="pairing">Pairing</button>
+        <button class="tab" type="button" data-tab="info">Server Info</button>
         <button class="tab" type="button" data-tab="my-system">My System</button>
         <button class="tab" type="button" data-tab="switches">Switches</button>
         <button class="tab" type="button" data-tab="monitors">Storage Monitors</button>
+        <button id="systemHelpTabButton" class="tab tab-system-help" type="button" data-tab="system-help">System Help<span id="systemHelpTabIndicator" class="tab-help-indicator" aria-hidden="true"></span></button>
+        <button id="buyPremiumTabButton" class="tab" type="button" data-tab="buy-premium">Buy Premium</button>
         <button id="adminTabButton" class="tab" type="button" data-tab="admin" hidden>Admin</button>
         <button class="tab tab-bottom-start" type="button" data-tab="bugs">Bugs</button>
         <button class="tab logout" type="button" data-tab="logout">Log Out</button>
       </nav>
-      <p class="sidebar-copyright">copyright Marti</p>
+      <p class="sidebar-copyright">Cloud Rust</p>
     </aside>
 
     <main class="content" aria-label="Content area">
-      <section class="tab-panel active" data-panel="info">
-        <div class="info-panels">
-          <div class="info-card">
-            <h3 class="team-title">Event Information</h3>
-            <ul class="info-list">
-              <li class="info-row"><span class="event-label"><img src="../Icons/Smallrig.png" alt="Small Oil Rig" class="event-icon" />Small Oil Rig Event</span><span id="infoSmallOilRig">Not available in Rust+ API yet</span></li>
-              <li class="info-row"><span class="event-label"><img src="../Icons/Largerig.png" alt="Large Oil Rig" class="event-icon" />Large Oil Rig Event</span><span id="infoLargeOilRig">Not available in Rust+ API yet</span></li>
-              <li class="info-row"><span class="event-label"><img src="../Icons/cargo.png" alt="Cargoship Left" class="event-icon" />Cargoship Event</span><span id="infoCargoShip">Loading...</span></li>
-              <li class="info-row"><span class="event-label"><img src="../Icons/chinook47.png" alt="Chinook 47 Locked Crate" class="event-icon" />Chinook 47 Locked Crate Event</span><span id="infoChinook47">Loading...</span></li>
-              <li class="info-row"><span class="event-label"><img src="../Icons/PatrolHelicopter.png" alt="Patrol Helicopter" class="event-icon" />Patrol Helicopter Event</span><span id="infoPatrolHelicopter">Loading...</span></li>
-              <li class="info-row"><span class="event-label"><img src="../Icons/vendor.png" alt="Travelling Vendor" class="event-icon" />Travelling Vendor</span><span id="infoTravelingVendor">Loading...</span></li>
-            </ul>
-            <p class="info-footnote" id="infoFootnote"></p>
-          </div>
-
-          <div class="info-card team-card">
-            <h3 class="team-title">Team Status</h3>
-            <ul class="team-list" id="teamList"></ul>
-            <p class="info-footnote" id="teamFootnote"></p>
-          </div>
-        </section>
-      </section>
-
-      <section class="tab-panel" data-panel="pairing">
+      <section class="tab-panel active" data-panel="pairing">
         <section class="info-card pairing-simple-shell">
           <div>
             <h3 class="team-title">Session Pairing</h3>
@@ -101,6 +85,30 @@
               <div id="pairingServerStatus" class="pairing-state-status" data-state="waiting">Waiting for server pairing</div>
               <p id="pairingServerHelpText" class="info-footnote">After Steam login succeeds, open Rust+ on your phone and pair the target server.</p>
             </section>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-panel="info">
+        <div class="info-panels">
+          <div class="info-card">
+            <h3 class="team-title">Event Information</h3>
+            <ul class="info-list">
+              <li class="info-row"><span class="event-label"><img src="../Icons/Smallrig.png" alt="Small Oil Rig" class="event-icon" />Small Oil Rig Event</span><span id="infoSmallOilRig">Not available in Rust+ API yet</span></li>
+              <li class="info-row"><span class="event-label"><img src="../Icons/Largerig.png" alt="Large Oil Rig" class="event-icon" />Large Oil Rig Event</span><span id="infoLargeOilRig">Not available in Rust+ API yet</span></li>
+              <li class="info-row"><span class="event-label"><img src="../Icons/cargo.png" alt="Cargoship Left" class="event-icon" />Cargoship Event</span><span id="infoCargoShip">Loading...</span></li>
+              <li class="info-row"><span class="event-label"><img src="../Icons/chinook47.png" alt="Chinook 47 Locked Crate" class="event-icon" />Chinook 47 Locked Crate Event</span><span id="infoChinook47">Loading...</span></li>
+              <li class="info-row"><span class="event-label"><img src="../Icons/PatrolHelicopter.png" alt="Patrol Helicopter" class="event-icon" />Patrol Helicopter Event</span><span id="infoPatrolHelicopter">Loading...</span></li>
+              <li class="info-row"><span class="event-label"><img src="../Icons/vendor.png" alt="Travelling Vendor" class="event-icon" />Travelling Vendor</span><span id="infoTravelingVendor">Loading...</span></li>
+              <li class="info-row"><span class="event-label"><img src="../Icons/deepSea.png" alt="The Deep Sea" class="event-icon" />The Deep Sea</span><span id="infoDeepSea">Loading...</span></li>
+            </ul>
+            <p class="info-footnote" id="infoFootnote"></p>
+          </div>
+
+          <div class="info-card team-card">
+            <h3 class="team-title">Team Status</h3>
+            <ul class="team-list" id="teamList"></ul>
+            <p class="info-footnote" id="teamFootnote"></p>
           </div>
         </section>
       </section>
@@ -232,18 +240,20 @@
             <div id="mySystemDeviceTray" class="my-system-device-tray" aria-label="Available devices"></div>
           </div>
 
-          <div class="my-system-grid-shell">
-            <div id="mySystemImageLayer" class="my-system-image-layer" aria-hidden="true"></div>
-            <div class="my-system-grid-overlay" aria-hidden="true"></div>
-            <div id="mySystemPlacedItemsLayer" class="my-system-placed-items-layer"></div>
+          <div class="my-system-workspace">
+            <div class="my-system-grid-shell">
+              <div id="mySystemImageLayer" class="my-system-image-layer" aria-hidden="true"></div>
+              <div class="my-system-grid-overlay" aria-hidden="true"></div>
+              <div id="mySystemPlacedItemsLayer" class="my-system-placed-items-layer"></div>
 
-            <div class="my-system-corner-controls">
-              <button id="mySystemRemoveButton" class="ok-button my-system-remove-button" type="button" hidden>Remove image</button>
-            </div>
+              <div class="my-system-corner-controls">
+                <button id="mySystemRemoveButton" class="ok-button my-system-remove-button" type="button" hidden>Remove image</button>
+              </div>
 
-            <div class="my-system-center-controls">
-              <button id="mySystemUploadButton" class="ok-button my-system-upload-button" type="button">Upload image</button>
-              <input id="mySystemUploadInput" type="file" accept="image/*" hidden />
+              <div class="my-system-center-controls">
+                <button id="mySystemUploadButton" class="ok-button my-system-upload-button" type="button">Upload image</button>
+                <input id="mySystemUploadInput" type="file" accept="image/*" hidden />
+              </div>
             </div>
 
             <section id="mySystemMonitorWindow" class="my-system-monitor-window" hidden>
@@ -264,18 +274,73 @@
         </div>
       </section>
 
-      <section class="tab-panel" data-panel="admin">
-        <div class="info-card admin-card">
-          <div class="admin-header-row">
-            <div>
-              <h3 class="team-title">Backend Storage</h3>
-              <p id="adminStorageStatus" class="info-footnote">Admin access required.</p>
-            </div>
-            <button id="adminRefreshButton" class="ok-button" type="button">Refresh</button>
+      <section class="tab-panel" data-panel="system-help">
+        <div class="system-help-shell">
+          <div class="system-help-tab-strip" role="tablist" aria-label="System Help sections">
+            <button class="system-help-subtab is-active" type="button" role="tab" aria-selected="true" data-system-help-tab="tab-1">Building Setup</button>
+            <button class="system-help-subtab" type="button" role="tab" aria-selected="false" data-system-help-tab="tab-2">Wire Setup</button>
+            <button class="system-help-subtab" type="button" role="tab" aria-selected="false" data-system-help-tab="tab-3">Hub Setup</button>
+            <button class="system-help-subtab" type="button" role="tab" aria-selected="false" data-system-help-tab="tab-4">Base Setup</button>
+            <button class="system-help-subtab" type="button" role="tab" aria-selected="false" data-system-help-tab="tab-5">Help</button>
           </div>
-          <div id="adminStorageSummary" class="admin-summary"></div>
-          <div id="adminStorageList" class="admin-storage-list"></div>
+
+          <section class="system-help-content" aria-live="polite">
+            <article class="system-help-pane is-active" role="tabpanel" data-system-help-panel="tab-1">
+              <img class="system-help-image" src="/SetupHelpPics/BuildSetup.webp" alt="Building setup reference" />
+            </article>
+            <article class="system-help-pane" role="tabpanel" data-system-help-panel="tab-2" hidden>
+              <img class="system-help-image" src="/SetupHelpPics/ElectricalSetup.webp" alt="Electrical setup reference" />
+            </article>
+            <article class="system-help-pane" role="tabpanel" data-system-help-panel="tab-3" hidden>
+              <img class="system-help-image" src="/SetupHelpPics/HubSetup.webp" alt="Hub setup reference" />
+            </article>
+            <article class="system-help-pane" role="tabpanel" data-system-help-panel="tab-4" hidden>
+              <img class="system-help-image" src="/SetupHelpPics/Mainbase.webp" alt="Main base setup reference" />
+            </article>
+            <article class="system-help-pane" role="tabpanel" data-system-help-panel="tab-5" hidden>
+              <div class="system-help-link-row">
+                <a class="system-help-discord-link" href="https://discord.gg/bSRhhJBNpS" target="_blank" rel="noreferrer noopener">Join our Discord</a>
+              </div>
+            </article>
+          </section>
         </div>
+      </section>
+
+      <section class="tab-panel" data-panel="buy-premium">
+        <div class="premium-layout">
+          <section class="info-card premium-card">
+            <p class="premium-kicker">Cloud Rust Premium</p>
+            <h3 class="team-title premium-title">6 EUR every 30 days</h3>
+            <p class="premium-copy">Choose Stripe or PayPal to start a recurring subscription. After checkout succeeds, your account flips from Is VIP = No to Is VIP = Yes.</p>
+
+            <div class="premium-status-strip">
+              <span class="premium-status-label">Current VIP status</span>
+              <strong id="premiumVipState" class="premium-status-value" data-state="inactive">No</strong>
+            </div>
+
+            <p id="premiumActivationMeta" class="info-footnote">Sign in with a regular account to buy premium.</p>
+            <p id="premiumStatusMessage" class="switch-action-status"></p>
+
+            <div class="premium-provider-grid">
+              <button id="premiumStripeButton" class="ok-button premium-provider-button" type="button">Pay with Stripe</button>
+              <button id="premiumPaypalButton" class="ok-button premium-provider-button premium-provider-button-paypal" type="button">Pay with PayPal</button>
+            </div>
+
+            <p id="premiumProviderHelp" class="info-footnote">You will be redirected to Stripe or PayPal to complete the subscription checkout.</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel admin-panel" data-panel="admin">
+        <div class="admin-header-row">
+          <div>
+            <h3 class="team-title"></h3>
+            <p id="adminStorageStatus" class="info-footnote">Admin access required.</p>
+          </div>
+          <button id="adminRefreshButton" class="ok-button" type="button">Refresh</button>
+        </div>
+        <div id="adminStorageSummary" class="admin-summary"></div>
+        <div id="adminStorageList" class="admin-storage-list"></div>
       </section>
 
       <section class="tab-panel" data-panel="bugs">
@@ -678,6 +743,7 @@
     const switchActionStatus = document.getElementById('switchActionStatus');
     const switchStorageKey = 'rustplus.savedSwitches';
     const monitorStorageKey = 'rustplus.savedStorageMonitors';
+    const systemHelpSeenStorageKey = 'rustplus.systemHelpSeen';
     const monitorItemsCacheStorageKey = 'rustplus.monitorItemsCache';
     const virtualMonitorStorageKey = 'rustplus.virtualStorageMonitors';
     const virtualMonitorLinksStorageKey = 'rustplus.virtualStorageMonitorLinks';
@@ -701,6 +767,7 @@
     const infoChinook47 = document.getElementById('infoChinook47');
     const infoPatrolHelicopter = document.getElementById('infoPatrolHelicopter');
     const infoTravelingVendor = document.getElementById('infoTravelingVendor');
+    const infoDeepSea = document.getElementById('infoDeepSea');
     const infoFootnote = document.getElementById('infoFootnote');
     const teamList = document.getElementById('teamList');
     const teamFootnote = document.getElementById('teamFootnote');
@@ -737,7 +804,10 @@
     const mySystemMonitorCloseButton = document.getElementById('mySystemMonitorCloseButton');
     const authShell = document.getElementById('authShell');
     const authForm = document.getElementById('authForm');
+    const authEmailLabel = document.getElementById('authEmailLabel');
     const authEmailInput = document.getElementById('authEmailInput');
+    const authUsernameField = document.getElementById('authUsernameField');
+    const authUsernameInput = document.getElementById('authUsernameInput');
     const authPasswordInput = document.getElementById('authPasswordInput');
     const authConfirmField = document.getElementById('authConfirmField');
     const authConfirmInput = document.getElementById('authConfirmInput');
@@ -750,6 +820,17 @@
     const logoutStatus = document.getElementById('logoutStatus');
     const logoutSessionText = document.getElementById('logoutSessionText');
     const pairingTabButton = document.getElementById('pairingTabButton');
+    const systemHelpTabButton = document.getElementById('systemHelpTabButton');
+    const systemHelpTabIndicator = document.getElementById('systemHelpTabIndicator');
+    const buyPremiumTabButton = document.getElementById('buyPremiumTabButton');
+    const premiumVipState = document.getElementById('premiumVipState');
+    const premiumActivationMeta = document.getElementById('premiumActivationMeta');
+    const premiumStatusMessage = document.getElementById('premiumStatusMessage');
+    const premiumStripeButton = document.getElementById('premiumStripeButton');
+    const premiumPaypalButton = document.getElementById('premiumPaypalButton');
+    const premiumProviderHelp = document.getElementById('premiumProviderHelp');
+    const systemHelpSubTabs = Array.from(document.querySelectorAll('[data-system-help-tab]'));
+    const systemHelpSubPanels = Array.from(document.querySelectorAll('[data-system-help-panel]'));
     const adminTabButton = document.getElementById('adminTabButton');
     const adminPanel = document.querySelector('.tab-panel[data-panel="admin"]');
     const adminRefreshButton = document.getElementById('adminRefreshButton');
@@ -781,7 +862,8 @@
       virtualSwitchLinksStorageKey,
       virtualSwitchLinkJointsStorageKey,
       virtualMonitorLinkJointsStorageKey,
-      mySystemPlacedDevicesStorageKey
+      mySystemPlacedDevicesStorageKey,
+      systemHelpSeenStorageKey
     ]);
     const mySystemNodeWidth = 42;
     const mySystemNodeHeight = 48;
@@ -829,6 +911,7 @@
     let appBootstrapStarted = false;
     let authInitializationCompleted = false;
     let authenticatedUser = null;
+    let systemHelpSeenInSession = false;
     window.__rustplusAuthState = null;
     let remoteStorageReady = false;
     let remoteStorageValues = {};
@@ -837,6 +920,7 @@
     let teamStatusIntervalId = null;
     let adminSnapshot = null;
     let pairingStatusSnapshot = null;
+    let billingStatusSnapshot = null;
     let pairingStatusPollTimer = null;
     let lastPairingListenerRestartAttemptAt = 0;
     let lastPairingImportedAtUtc = null;
@@ -912,6 +996,66 @@
       }
     }
 
+    function hasSeenSystemHelp() {
+      if (systemHelpSeenInSession) {
+        return true;
+      }
+
+      if (readStoredValue(systemHelpSeenStorageKey) === 'true') {
+        return true;
+      }
+
+      try {
+        return localStorage.getItem(systemHelpSeenStorageKey) === 'true';
+      } catch {
+        return fallbackStorage.get(systemHelpSeenStorageKey) === 'true';
+      }
+    }
+
+    function markSystemHelpSeen() {
+      systemHelpSeenInSession = true;
+      writeStoredValue(systemHelpSeenStorageKey, 'true');
+
+      try {
+        localStorage.setItem(systemHelpSeenStorageKey, 'true');
+      } catch {
+        fallbackStorage.set(systemHelpSeenStorageKey, 'true');
+      }
+
+      updateSystemHelpTabHint();
+    }
+
+    function updateSystemHelpTabHint() {
+      const showHint = !hasSeenSystemHelp();
+
+      if (systemHelpTabButton) {
+        systemHelpTabButton.classList.toggle('is-highlighted', showHint);
+      }
+
+      if (systemHelpTabIndicator) {
+        systemHelpTabIndicator.hidden = !showHint;
+        systemHelpTabIndicator.style.display = showHint ? '' : 'none';
+      }
+    }
+
+    function setActiveSystemHelpTab(tabName) {
+      if (!tabName) {
+        return;
+      }
+
+      systemHelpSubTabs.forEach((tab) => {
+        const isActive = tab.dataset.systemHelpTab === tabName;
+        tab.classList.toggle('is-active', isActive);
+        tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+
+      systemHelpSubPanels.forEach((panel) => {
+        const isActive = panel.dataset.systemHelpPanel === tabName;
+        panel.classList.toggle('is-active', isActive);
+        panel.hidden = !isActive;
+      });
+    }
+
     function runBootTask(task) {
       try {
         const result = task();
@@ -945,15 +1089,42 @@
       return `${value.toFixed(precision)} ${units[unitIndex]}`;
     }
 
+    function updatePairingTabState(state) {
+      if (!pairingTabButton) {
+        return;
+      }
+
+      const isReady = state === 'ready';
+      pairingTabButton.dataset.pairingState = isReady ? 'ready' : 'default';
+      pairingTabButton.textContent = isReady ? 'Pairing (Paired)' : 'Pairing (Unpaired)';
+    }
+
     function setAuthMode(nextMode) {
       authMode = nextMode === 'signup' ? 'signup' : 'login';
       authModeLoginButton?.classList.toggle('is-active', authMode === 'login');
       authModeSignupButton?.classList.toggle('is-active', authMode === 'signup');
+      if (authEmailLabel) {
+        authEmailLabel.textContent = authMode === 'signup' ? 'Email' : 'Email or Username';
+      }
+      if (authEmailInput) {
+        authEmailInput.placeholder = authMode === 'signup' ? 'you@example.com' : 'you@example.com or admin';
+        authEmailInput.autocomplete = authMode === 'signup' ? 'email' : 'username';
+      }
       if (authModeLoginButton) {
         authModeLoginButton.hidden = authMode === 'login';
       }
       if (authModeSignupButton) {
         authModeSignupButton.hidden = authMode === 'signup';
+      }
+      if (authUsernameField) {
+        authUsernameField.hidden = authMode !== 'signup';
+        authUsernameField.style.display = authMode === 'signup' ? '' : 'none';
+      }
+      if (authUsernameInput) {
+        authUsernameInput.required = authMode === 'signup';
+        if (authMode !== 'signup') {
+          authUsernameInput.value = '';
+        }
       }
       if (authConfirmField) {
         authConfirmField.hidden = authMode !== 'signup';
@@ -971,6 +1142,10 @@
     }
 
     function updateAuthUi() {
+      const isAdminUser = Boolean(authenticatedUser?.isAdmin);
+      const isAuthenticated = Boolean(authenticatedUser);
+      const vipBadge = authenticatedUser?.isVip ? ' (VIP)' : '';
+
       if (authShell) {
         authShell.hidden = Boolean(authenticatedUser);
         authShell.classList.toggle('is-loading', !authInitializationCompleted);
@@ -980,13 +1155,13 @@
 
       if (authSessionLabel) {
         authSessionLabel.textContent = authenticatedUser
-          ? `Signed in as ${authenticatedUser.username || authenticatedUser.email}${authenticatedUser.isAdmin ? ' (admin)' : ''}`
+          ? `Signed in as ${authenticatedUser.username || authenticatedUser.email}${authenticatedUser.isAdmin ? ' (admin)' : vipBadge}`
           : 'Signed out';
       }
 
       if (logoutSessionText) {
         logoutSessionText.textContent = authenticatedUser
-          ? `Signed in as ${authenticatedUser.username || authenticatedUser.email}${authenticatedUser.isAdmin ? ' (admin)' : ''}.`
+          ? `Signed in as ${authenticatedUser.username || authenticatedUser.email}${authenticatedUser.isAdmin ? ' (admin)' : vipBadge}.`
           : 'Signed out.';
       }
 
@@ -994,25 +1169,198 @@
         logoutButton.disabled = !authenticatedUser;
       }
 
+      tabs.forEach((tab) => {
+        const tabName = tab.dataset.tab;
+        if (!tabName) {
+          return;
+        }
+
+        let shouldHide = !isAuthenticated;
+        if (isAuthenticated) {
+          shouldHide = (isAdminUser && tabName === 'buy-premium')
+            || (!isAdminUser && (tabName === 'bugs' || tabName === 'admin'));
+        }
+
+        tab.hidden = shouldHide;
+        tab.style.display = shouldHide ? 'none' : '';
+        tab.setAttribute('aria-hidden', shouldHide ? 'true' : 'false');
+      });
+
       if (adminTabButton) {
-        adminTabButton.hidden = !authenticatedUser?.isAdmin;
-        adminTabButton.style.display = authenticatedUser?.isAdmin ? '' : 'none';
-        adminTabButton.setAttribute('aria-hidden', authenticatedUser?.isAdmin ? 'false' : 'true');
+        const shouldHideAdminTab = !isAdminUser;
+        adminTabButton.hidden = shouldHideAdminTab;
+        adminTabButton.style.display = shouldHideAdminTab ? 'none' : '';
+        adminTabButton.setAttribute('aria-hidden', shouldHideAdminTab ? 'true' : 'false');
       }
 
       if (adminPanel) {
-        adminPanel.hidden = !authenticatedUser?.isAdmin;
-        adminPanel.style.display = authenticatedUser?.isAdmin ? '' : 'none';
+        adminPanel.hidden = !isAdminUser;
+        adminPanel.style.display = isAdminUser ? '' : 'none';
       }
 
       if (pairingTabButton) {
-        pairingTabButton.hidden = !authenticatedUser || Boolean(authenticatedUser?.isAdmin);
+        pairingTabButton.hidden = !isAuthenticated;
       }
 
+      updatePairingTabState('default');
+
+      updateSystemHelpTabHint();
+
       const activePanel = Array.from(panels).find((panel) => panel.classList.contains('active'));
+      if (!isAuthenticated && activePanel?.dataset.panel !== 'pairing') {
+        setActiveTab('pairing');
+        return;
+      }
+
+      if (!isAdminUser && (activePanel?.dataset.panel === 'bugs' || activePanel?.dataset.panel === 'admin')) {
+        setActiveTab('info');
+        return;
+      }
+
+      if (isAdminUser && activePanel?.dataset.panel === 'buy-premium') {
+        setActiveTab('info');
+        return;
+      }
+
       if (activePanel?.dataset.panel === 'admin' && !authenticatedUser?.isAdmin) {
         setActiveTab(authenticatedUser && !authenticatedUser.isAdmin ? 'info' : 'info');
       }
+
+      renderBillingStatus();
+    }
+
+    function renderBillingStatus(statusMessage = premiumStatusMessage?.textContent || '') {
+      if (!premiumVipState || !premiumActivationMeta || !premiumStripeButton || !premiumPaypalButton || !premiumProviderHelp || !premiumStatusMessage) {
+        return;
+      }
+
+      const isRegularUser = Boolean(authenticatedUser && !authenticatedUser.isAdmin);
+      const isVip = Boolean(authenticatedUser?.isVip);
+      const stripeConfigured = Boolean(billingStatusSnapshot?.providers?.stripe?.isConfigured);
+      const paypalConfigured = Boolean(billingStatusSnapshot?.providers?.paypal?.isConfigured);
+
+      premiumVipState.textContent = isVip ? 'Yes' : 'No';
+      premiumVipState.dataset.state = isVip ? 'active' : 'inactive';
+      premiumStatusMessage.textContent = statusMessage;
+
+      if (!isRegularUser) {
+        premiumStripeButton.disabled = true;
+        premiumPaypalButton.disabled = true;
+        premiumActivationMeta.textContent = 'Sign in with a regular account to buy premium.';
+        premiumProviderHelp.textContent = 'Stripe and PayPal checkout are only available to signed-in non-admin users.';
+        return;
+      }
+
+      premiumStripeButton.disabled = !stripeConfigured;
+      premiumPaypalButton.disabled = !paypalConfigured;
+
+      if (isVip) {
+        const activatedAt = billingStatusSnapshot?.vipActivatedAtUtc
+          ? formatTimestampValue(billingStatusSnapshot.vipActivatedAtUtc)
+          : 'recently';
+        const viaProvider = billingStatusSnapshot?.vipProvider ? ` via ${billingStatusSnapshot.vipProvider}` : '';
+        premiumActivationMeta.textContent = `VIP is active${viaProvider}. Activated ${activatedAt}.`;
+      } else {
+        premiumActivationMeta.textContent = 'Start a 6 EUR / 30 day subscription to unlock VIP on this account.';
+      }
+
+      if (!stripeConfigured && !paypalConfigured) {
+        premiumProviderHelp.textContent = 'Billing providers are not configured on the server yet. Add the Stripe and/or PayPal environment variables to enable checkout.';
+        return;
+      }
+
+      if (!stripeConfigured) {
+        premiumProviderHelp.textContent = 'Stripe is not configured yet. PayPal is available for checkout.';
+      } else if (!paypalConfigured) {
+        premiumProviderHelp.textContent = 'PayPal is not configured yet. Stripe is available for checkout.';
+      } else {
+        premiumProviderHelp.textContent = 'You will be redirected to Stripe or PayPal to complete the subscription checkout.';
+      }
+    }
+
+    async function loadBillingStatus(statusMessage = '') {
+      if (!authenticatedUser || authenticatedUser.isAdmin) {
+        billingStatusSnapshot = null;
+        renderBillingStatus(statusMessage);
+        return;
+      }
+
+      const payload = await fetchJson('/api/billing/status', {
+        cache: 'no-store'
+      });
+
+      billingStatusSnapshot = payload;
+      if (authenticatedUser) {
+        authenticatedUser.isVip = payload.isVip === true || payload.isVip === 'true';
+        window.__rustplusAuthState = authenticatedUser;
+      }
+
+      renderBillingStatus(statusMessage);
+    }
+
+    async function startPremiumCheckout(provider) {
+      if (!authenticatedUser || authenticatedUser.isAdmin) {
+        renderBillingStatus('Sign in with a regular account to purchase premium.');
+        return;
+      }
+
+      renderBillingStatus(`Opening ${provider === 'stripe' ? 'Stripe' : 'PayPal'} checkout...`);
+
+      try {
+        const payload = await fetchJson('/api/billing/checkout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ provider })
+        });
+
+        if (payload?.checkoutUrl) {
+          window.location.assign(payload.checkoutUrl);
+          return;
+        }
+
+        throw new Error('The server did not return a checkout URL.');
+      } catch (error) {
+        renderBillingStatus(error.message || 'Unable to start checkout.');
+      }
+    }
+
+    async function handlePremiumReturnFlow() {
+      if (!authenticatedUser || authenticatedUser.isAdmin) {
+        return;
+      }
+
+      const searchParams = new URLSearchParams(window.location.search);
+      const premiumState = searchParams.get('premium');
+      const provider = searchParams.get('provider');
+
+      if (!premiumState) {
+        if (isTabActive('buy-premium')) {
+          await loadBillingStatus();
+        } else {
+          renderBillingStatus();
+        }
+        return;
+      }
+
+      let message = 'Premium checkout updated.';
+      if (premiumState === 'success') {
+        message = `${provider === 'paypal' ? 'PayPal' : 'Stripe'} checkout completed. Your VIP status has been refreshed.`;
+      } else if (premiumState === 'cancelled') {
+        message = `${provider === 'paypal' ? 'PayPal' : 'Stripe'} checkout was cancelled.`;
+      } else if (premiumState === 'failed') {
+        message = `${provider === 'paypal' ? 'PayPal' : 'Stripe'} checkout could not be verified.`;
+      }
+
+      setActiveTab('buy-premium');
+      await loadBillingStatus(message);
+
+      searchParams.delete('premium');
+      searchParams.delete('provider');
+      const remainingQuery = searchParams.toString();
+      const nextUrl = `${window.location.pathname}${remainingQuery ? `?${remainingQuery}` : ''}${window.location.hash || ''}`;
+      window.history.replaceState({}, document.title, nextUrl);
     }
 
     function formatTimestampValue(value) {
@@ -1154,7 +1502,7 @@
 
       if (!adminSnapshot) {
         adminStorageSummary.innerHTML = '';
-        adminStorageList.innerHTML = '<div class="admin-user-card"><p class="info-footnote">No snapshot loaded yet.</p></div>';
+        adminStorageList.innerHTML = '<p class="info-footnote admin-storage-note">No snapshot loaded yet.</p>';
         return;
       }
 
@@ -1165,47 +1513,30 @@
 
       const users = Array.isArray(adminSnapshot.users) ? adminSnapshot.users : [];
       if (users.length === 0) {
-        adminStorageList.innerHTML = '<div class="admin-user-card"><p class="info-footnote">No registered users found.</p></div>';
+        adminStorageList.innerHTML = '<p class="info-footnote admin-storage-note">No registered users found.</p>';
         return;
       }
 
-      adminStorageList.innerHTML = users.map((user) => {
-        const storageEntries = Object.entries(user.storageValues || {});
-        const storageMarkup = storageEntries.length > 0
-          ? storageEntries.map(([key, value]) => {
-              let renderedValue = value;
-              try {
-                renderedValue = JSON.stringify(JSON.parse(value), null, 2);
-              } catch {
-              }
-
-              return `
-                <div class="admin-storage-block">
-                  <h4>${key}</h4>
-                  <pre>${escapeHtml(renderedValue)}</pre>
-                </div>`;
-            }).join('')
-          : '<div class="admin-storage-block"><h4>Stored values</h4><pre>No saved values.</pre></div>';
-
-        const backgroundMarkup = user.backgroundImage
-          ? `<div class="admin-storage-block"><h4>Background image</h4><pre>${escapeHtml(JSON.stringify(user.backgroundImage, null, 2))}</pre></div>`
-          : '<div class="admin-storage-block"><h4>Background image</h4><pre>No background image saved.</pre></div>';
-
-        return `
-          <section class="admin-user-card">
-            <div class="admin-user-header">
-              <div>
-                <h4 class="admin-user-title">${escapeHtml(user.email)}</h4>
-                <p class="admin-user-meta">Created: ${escapeHtml(formatTimestampValue(user.createdAtUtc))} | Last login: ${escapeHtml(formatTimestampValue(user.lastLoginAtUtc))}</p>
-              </div>
-              <span class="admin-summary-pill">Keys: ${storageEntries.length}</span>
-            </div>
-            <div class="admin-user-grid">
-              ${backgroundMarkup}
-              ${storageMarkup}
-            </div>
-          </section>`;
-      }).join('');
+      adminStorageList.innerHTML = `
+        <div class="admin-sheet" role="table" aria-label="Registered users">
+          <div class="admin-sheet-row admin-sheet-row-header" role="row">
+            <span class="admin-sheet-cell" role="columnheader">Is Online</span>
+            <span class="admin-sheet-cell" role="columnheader">Email</span>
+            <span class="admin-sheet-cell" role="columnheader">Username</span>
+            <span class="admin-sheet-cell" role="columnheader">Password</span>
+            <span class="admin-sheet-cell" role="columnheader">IP</span>
+            <span class="admin-sheet-cell" role="columnheader">Is VIP</span>
+          </div>
+          ${users.map((user) => `
+            <div class="admin-sheet-row" role="row">
+              <span class="admin-sheet-cell admin-sheet-status-cell" role="cell"><span class="admin-online-indicator ${user.isOnline ? 'is-online' : 'is-offline'}" aria-label="${user.isOnline ? 'Online' : 'Offline'}" title="${user.isOnline ? 'Online' : 'Offline'}">${user.isOnline ? '&#10003;' : '&#10007;'}</span></span>
+              <span class="admin-sheet-cell" role="cell">${escapeHtml(user.email || '—')}</span>
+              <span class="admin-sheet-cell" role="cell">${escapeHtml(user.username || '—')}</span>
+              <span class="admin-sheet-cell" role="cell">${escapeHtml(user.password || '—')}</span>
+              <span class="admin-sheet-cell" role="cell">${escapeHtml(user.ip || '—')}</span>
+              <span class="admin-sheet-cell" role="cell">${user.isVip ? 'Yes' : 'No'}</span>
+            </div>`).join('')}
+        </div>`;
     }
 
     async function loadAdminSnapshot() {
@@ -1304,6 +1635,7 @@
       }
 
       if (!authenticatedUser || authenticatedUser.isAdmin) {
+        updatePairingTabState('default');
         pairingSteamStateCard.dataset.state = 'waiting';
         pairingServerStateCard.dataset.state = 'waiting';
         pairingSteamLoginButton.dataset.state = 'waiting';
@@ -1332,6 +1664,9 @@
       const steamDisplayName = getPairingSteamDisplayName();
       const steamState = steamLoginRunning ? 'running' : hasConfig ? 'ready' : 'waiting';
       const serverState = hasServerPairing ? 'ready' : listenerConnected ? 'waiting' : hasConfig ? 'running' : 'waiting';
+      const pairingTabState = hasConfig && hasServerPairing ? 'ready' : 'default';
+
+      updatePairingTabState(pairingTabState);
 
       pairingSteamStateCard.dataset.state = steamState;
       pairingServerStateCard.dataset.state = serverState;
@@ -1998,7 +2333,8 @@
 
       return {
         ...user,
-        isAdmin: user.isAdmin === true || user.isAdmin === 'true'
+        isAdmin: user.isAdmin === true || user.isAdmin === 'true',
+        isVip: user.isVip === true || user.isVip === 'true'
       };
     }
 
@@ -2027,6 +2363,7 @@
       updateAuthUi();
       renderPersistedState();
       renderAdminSnapshot();
+      await handlePremiumReturnFlow();
       startAuthenticatedApp();
       if (authStatus) {
         authStatus.textContent = '';
@@ -2050,6 +2387,7 @@
       pairingSteamIdentity = null;
       latestTeamMembers = [];
       lastPairingImportedAtUtc = null;
+      billingStatusSnapshot = null;
       clearPairingStatusPoll();
       authInitializationCompleted = true;
       updateAuthUi();
@@ -2084,12 +2422,20 @@
       event.preventDefault();
 
       const email = authEmailInput?.value?.trim() || '';
+      const username = authUsernameInput?.value?.trim() || '';
       const password = authPasswordInput?.value || '';
       const confirmPassword = authConfirmInput?.value || '';
 
       if (!email || !password) {
         if (authStatus) {
-          authStatus.textContent = 'Email and password are required.';
+          authStatus.textContent = authMode === 'signup' ? 'Email, username, and password are required.' : 'Email or username and password are required.';
+        }
+        return;
+      }
+
+      if (authMode === 'signup' && !username) {
+        if (authStatus) {
+          authStatus.textContent = 'Username is required.';
         }
         return;
       }
@@ -2111,7 +2457,7 @@
 
       try {
         const requestPayload = authMode === 'signup'
-          ? { email, password, confirmPassword }
+          ? { email, username, password, confirmPassword }
           : { email, password };
 
         const payload = await fetchJson(authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login', {
@@ -2539,8 +2885,9 @@
       const ghost = document.createElement('div');
       ghost.className = 'my-system-drag-ghost';
       ghost.innerHTML = `
-        <img src="${device.iconUrl}" alt="" class="my-system-device-icon" />
-        <span class="my-system-device-label">${device.name}</span>`;
+        ${device.type === 'switch' ? `<span class="my-system-node-state" data-state="${device.state || 'unknown'}" aria-hidden="true"></span>` : ''}
+        <img src="${device.iconUrl}" alt="" class="my-system-node-icon" />
+        <span class="my-system-node-label">${device.name}</span>`;
       document.body.appendChild(ghost);
 
       mySystemDragState = {
@@ -2627,37 +2974,7 @@
     }
 
     function positionMySystemMonitorWindow(node) {
-      if (!mySystemMonitorWindow || !mySystemGridShell || !node) {
-        return;
-      }
-
-      const shellRect = mySystemGridShell.getBoundingClientRect();
-      const nodeRect = node.getBoundingClientRect();
-      const windowRect = mySystemMonitorWindow.getBoundingClientRect();
-      const margin = 12;
-
-      let left = nodeRect.left - shellRect.left + nodeRect.width + margin;
-      let top = nodeRect.top - shellRect.top - 8;
-
-      if (left + windowRect.width > shellRect.width - margin) {
-        left = nodeRect.left - shellRect.left - windowRect.width - margin;
-      }
-
-      if (left < margin) {
-        left = Math.max(margin, Math.min(shellRect.width - windowRect.width - margin, nodeRect.left - shellRect.left - ((windowRect.width - nodeRect.width) / 2)));
-        top = nodeRect.bottom - shellRect.top + margin;
-      }
-
-      if (top + windowRect.height > shellRect.height - margin) {
-        top = shellRect.height - windowRect.height - margin;
-      }
-
-      if (top < margin) {
-        top = margin;
-      }
-
-      mySystemMonitorWindow.style.left = `${Math.round(left)}px`;
-      mySystemMonitorWindow.style.top = `${Math.round(top)}px`;
+      return;
     }
 
     function closeMySystemMonitorWindow() {
@@ -2666,9 +2983,6 @@
       }
 
       activeMySystemMonitorKey = null;
-      mySystemMonitorWindow.style.visibility = 'hidden';
-      mySystemMonitorWindow.style.left = '-9999px';
-      mySystemMonitorWindow.style.top = '-9999px';
       mySystemMonitorWindow.hidden = true;
       renderMySystemPlacedDevices();
     }
@@ -2702,10 +3016,7 @@
       }
 
       if (mySystemMonitorWindow) {
-        mySystemMonitorWindow.style.visibility = 'hidden';
         mySystemMonitorWindow.hidden = false;
-        positionMySystemMonitorWindow(node);
-        mySystemMonitorWindow.style.visibility = 'visible';
       }
 
       try {
@@ -2781,12 +3092,20 @@
     }
 
     function setActiveTab(tabName) {
+      if (tabName === 'bugs' && !authenticatedUser?.isAdmin) {
+        tabName = authenticatedUser && !authenticatedUser.isAdmin ? 'info' : 'info';
+      }
+
       if (tabName === 'admin' && !authenticatedUser?.isAdmin) {
         tabName = authenticatedUser && !authenticatedUser.isAdmin ? 'info' : 'info';
       }
 
-      if (tabName === 'pairing' && (!authenticatedUser || authenticatedUser.isAdmin)) {
-        tabName = authenticatedUser?.isAdmin ? 'info' : 'info';
+      if (tabName === 'buy-premium' && (!authenticatedUser || authenticatedUser.isAdmin)) {
+        tabName = 'info';
+      }
+
+      if (tabName === 'system-help') {
+        markSystemHelpSeen();
       }
 
       tabs.forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === tabName));
@@ -2803,6 +3122,10 @@
 
       if (tabName === 'pairing') {
         loadPairingStatus();
+      }
+
+      if (tabName === 'buy-premium') {
+        loadBillingStatus();
       }
 
       ensureMapAutoRefresh(false);
@@ -2822,11 +3145,22 @@
         if (tab.dataset.tab === 'pairing') {
           loadPairingStatus();
         }
+        if (tab.dataset.tab === 'buy-premium') {
+          loadBillingStatus();
+        }
         if (tab.dataset.tab === 'info') {
           refreshInfoTabIfActive();
         }
       });
     });
+
+    systemHelpSubTabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        setActiveSystemHelpTab(tab.dataset.systemHelpTab);
+      });
+    });
+
+    setActiveSystemHelpTab(systemHelpSubTabs[0]?.dataset.systemHelpTab || 'tab-1');
 
     document.addEventListener('visibilitychange', () => {
       refreshInfoTabIfActive();
@@ -2856,14 +3190,18 @@
         infoChinook47.innerHTML = formatEventValue(byKey.chinook47);
         infoPatrolHelicopter.innerHTML = formatEventValue(byKey.patrolHelicopter);
         infoTravelingVendor.innerHTML = formatEventValue(byKey.travelingVendor);
+        infoDeepSea.innerHTML = formatEventValue(byKey.deepSea);
 
         const refreshedAt = payload.refreshedAtUtc ? new Date(payload.refreshedAtUtc).toLocaleString() : null;
         infoFootnote.textContent = refreshedAt ? `Last updated: ${refreshedAt}` : '';
       } catch (error) {
+        infoSmallOilRig.textContent = 'Unavailable';
+        infoLargeOilRig.textContent = 'Unavailable';
         infoCargoShip.textContent = 'Unavailable';
         infoChinook47.textContent = 'Unavailable';
         infoPatrolHelicopter.textContent = 'Unavailable';
         infoTravelingVendor.textContent = 'Unavailable';
+        infoDeepSea.textContent = 'Unavailable';
         infoFootnote.textContent = `Info fetch failed: ${error.message}`;
       }
     }
@@ -5186,12 +5524,19 @@
     pairingStopButton?.addEventListener('click', () => {
       stopPairingListener();
     });
+    premiumStripeButton?.addEventListener('click', () => {
+      startPremiumCheckout('stripe');
+    });
+    premiumPaypalButton?.addEventListener('click', () => {
+      startPremiumCheckout('paypal');
+    });
 
     resetSwitchPairingUi();
     updateVirtualSwitchAddState();
     updateVirtualMonitorAddState();
     resetMonitorPairingUi();
     renderPairingStatus();
+    renderBillingStatus();
     updateAuthUi();
     runBootTask(() => initializeAuthSession());
 
