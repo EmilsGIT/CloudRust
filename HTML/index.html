@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RustPlus Web UI</title>
+  <link rel="icon" type="image/png" href="../Icons/CloudRustLogo.png" />
   <link rel="stylesheet" href="../CSS/styles.css" />
 </head>
 <body>
@@ -47,6 +48,10 @@
 
   <div class="app-layout">
     <aside class="sidebar">
+      <div class="app-brand" aria-label="cloudrust brand">
+        <img src="../Icons/CloudRustLogo.png" alt="cloudrust" class="app-brand-logo" />
+        <span class="app-brand-text">cloudrust</span>
+      </div>
       <p id="authSessionLabel" class="sidebar-session-label">Signed out</p>
       <nav class="tab-list" aria-label="Main navigation">        
         <button id="pairingTabButton" class="tab active" type="button" data-tab="pairing">Pairing</button>
@@ -310,23 +315,36 @@
         <div class="premium-layout">
           <section class="info-card premium-card">
             <p class="premium-kicker">Cloud Rust Premium</p>
-            <h3 class="team-title premium-title">6 EUR every 30 days</h3>
-            <p class="premium-copy">Choose Stripe or PayPal to start a recurring subscription. After checkout succeeds, your account flips from Is VIP = No to Is VIP = Yes.</p>
-
-            <div class="premium-status-strip">
-              <span class="premium-status-label">Current VIP status</span>
-              <strong id="premiumVipState" class="premium-status-value" data-state="inactive">No</strong>
-            </div>
-
-            <p id="premiumActivationMeta" class="info-footnote">Sign in with a regular account to buy premium.</p>
+            <h3 class="team-title premium-title">Choose your VIP plan</h3>
             <p id="premiumStatusMessage" class="switch-action-status"></p>
 
-            <div class="premium-provider-grid">
-              <button id="premiumStripeButton" class="ok-button premium-provider-button" type="button">Pay with Stripe</button>
-              <button id="premiumPaypalButton" class="ok-button premium-provider-button premium-provider-button-paypal" type="button">Pay with PayPal</button>
+            <div class="premium-offer-grid">
+              <article class="premium-offer-card">
+                <div class="premium-offer-header">
+                  <p class="premium-offer-kicker">One-time payment</p>
+                  <h4 class="premium-offer-title">7£ for 30 days VIP</h4>
+                </div>
+                <p class="premium-offer-copy">Pay once, keep VIP for 30 days, and renew manually whenever you want another month.</p>
+                <div class="premium-provider-grid premium-provider-grid-offer">
+                  <button class="ok-button premium-provider-button" type="button" data-premium-checkout data-provider="stripe" data-plan="one-time">Pay with Stripe</button>
+                  <button class="ok-button premium-provider-button premium-provider-button-paypal" type="button" data-premium-checkout data-provider="paypal" data-plan="one-time">Pay with PayPal</button>
+                </div>
+              </article>
+
+              <article class="premium-offer-card premium-offer-card-featured">
+                <div class="premium-offer-header">
+                  <p class="premium-offer-kicker">Subscription</p>
+                  <h4 class="premium-offer-title">6£ per month</h4>
+                </div>
+                <p class="premium-offer-copy">Automatic monthly renewal for players who want VIP to stay active without manual top-ups.</p>
+                <div class="premium-provider-grid premium-provider-grid-offer">
+                  <button class="ok-button premium-provider-button" type="button" data-premium-checkout data-provider="stripe" data-plan="subscription">Pay with Stripe</button>
+                  <button class="ok-button premium-provider-button premium-provider-button-paypal" type="button" data-premium-checkout data-provider="paypal" data-plan="subscription">Pay with PayPal</button>
+                </div>
+              </article>
             </div>
 
-            <p id="premiumProviderHelp" class="info-footnote">You will be redirected to Stripe or PayPal to complete the subscription checkout.</p>
+            <p id="premiumProviderHelp" class="info-footnote">You will be redirected to Stripe or PayPal to complete the selected checkout.</p>
           </section>
         </div>
       </section>
@@ -823,11 +841,8 @@
     const systemHelpTabButton = document.getElementById('systemHelpTabButton');
     const systemHelpTabIndicator = document.getElementById('systemHelpTabIndicator');
     const buyPremiumTabButton = document.getElementById('buyPremiumTabButton');
-    const premiumVipState = document.getElementById('premiumVipState');
-    const premiumActivationMeta = document.getElementById('premiumActivationMeta');
     const premiumStatusMessage = document.getElementById('premiumStatusMessage');
-    const premiumStripeButton = document.getElementById('premiumStripeButton');
-    const premiumPaypalButton = document.getElementById('premiumPaypalButton');
+    const premiumCheckoutButtons = Array.from(document.querySelectorAll('[data-premium-checkout]'));
     const premiumProviderHelp = document.getElementById('premiumProviderHelp');
     const systemHelpSubTabs = Array.from(document.querySelectorAll('[data-system-help-tab]'));
     const systemHelpSubPanels = Array.from(document.querySelectorAll('[data-system-help-panel]'));
@@ -878,6 +893,7 @@
     let draftWiringJoints = [];
     let fcmEventSource = null;
     let fcmReconnectTimer = null;
+    const infoEventsRefreshIntervalMs = 30000;
     const mapRefreshIntervalMs = 60000;
     const monitorRefreshIntervalMs = 60000;
     const monitorInterRequestDelayMs = 50;
@@ -889,6 +905,10 @@
     let mapAutoRefreshTimer = null;
     let mapLastRequestedAtMs = 0;
     let mapRequestInFlight = null;
+    let infoEventsRequestInFlight = null;
+    let infoEventsLastRequestedAtMs = 0;
+    let teamStatusRequestInFlight = null;
+    let teamStatusLastRequestedAtMs = 0;
     let latestMapPayload = null;
     const mapImagePromiseCache = new Map();
     let mapRenderContext = null;
@@ -1229,52 +1249,55 @@
       renderBillingStatus();
     }
 
+    function getPremiumOfferConfig(plan, provider) {
+      if (plan === 'one-time') {
+        return billingStatusSnapshot?.offers?.oneTime?.providers?.[provider] ?? null;
+      }
+
+      if (plan === 'subscription') {
+        return billingStatusSnapshot?.offers?.subscription?.providers?.[provider] ?? null;
+      }
+
+      return null;
+    }
+
     function renderBillingStatus(statusMessage = premiumStatusMessage?.textContent || '') {
-      if (!premiumVipState || !premiumActivationMeta || !premiumStripeButton || !premiumPaypalButton || !premiumProviderHelp || !premiumStatusMessage) {
+      if (!premiumProviderHelp || !premiumStatusMessage || premiumCheckoutButtons.length === 0) {
         return;
       }
 
       const isRegularUser = Boolean(authenticatedUser && !authenticatedUser.isAdmin);
-      const isVip = Boolean(authenticatedUser?.isVip);
-      const stripeConfigured = Boolean(billingStatusSnapshot?.providers?.stripe?.isConfigured);
-      const paypalConfigured = Boolean(billingStatusSnapshot?.providers?.paypal?.isConfigured);
+      const availableCheckoutCount = premiumCheckoutButtons.reduce((count, button) => {
+        const provider = button.dataset.provider;
+        const plan = button.dataset.plan;
+        return count + (getPremiumOfferConfig(plan, provider)?.isConfigured ? 1 : 0);
+      }, 0);
 
-      premiumVipState.textContent = isVip ? 'Yes' : 'No';
-      premiumVipState.dataset.state = isVip ? 'active' : 'inactive';
       premiumStatusMessage.textContent = statusMessage;
 
       if (!isRegularUser) {
-        premiumStripeButton.disabled = true;
-        premiumPaypalButton.disabled = true;
-        premiumActivationMeta.textContent = 'Sign in with a regular account to buy premium.';
+        premiumCheckoutButtons.forEach((button) => {
+          button.disabled = true;
+        });
         premiumProviderHelp.textContent = 'Stripe and PayPal checkout are only available to signed-in non-admin users.';
         return;
       }
 
-      premiumStripeButton.disabled = !stripeConfigured;
-      premiumPaypalButton.disabled = !paypalConfigured;
+      premiumCheckoutButtons.forEach((button) => {
+        const provider = button.dataset.provider;
+        const plan = button.dataset.plan;
+        button.disabled = !Boolean(getPremiumOfferConfig(plan, provider)?.isConfigured);
+      });
 
-      if (isVip) {
-        const activatedAt = billingStatusSnapshot?.vipActivatedAtUtc
-          ? formatTimestampValue(billingStatusSnapshot.vipActivatedAtUtc)
-          : 'recently';
-        const viaProvider = billingStatusSnapshot?.vipProvider ? ` via ${billingStatusSnapshot.vipProvider}` : '';
-        premiumActivationMeta.textContent = `VIP is active${viaProvider}. Activated ${activatedAt}.`;
-      } else {
-        premiumActivationMeta.textContent = 'Start a 6 EUR / 30 day subscription to unlock VIP on this account.';
-      }
-
-      if (!stripeConfigured && !paypalConfigured) {
+      if (availableCheckoutCount === 0) {
         premiumProviderHelp.textContent = 'Billing providers are not configured on the server yet. Add the Stripe and/or PayPal environment variables to enable checkout.';
         return;
       }
 
-      if (!stripeConfigured) {
-        premiumProviderHelp.textContent = 'Stripe is not configured yet. PayPal is available for checkout.';
-      } else if (!paypalConfigured) {
-        premiumProviderHelp.textContent = 'PayPal is not configured yet. Stripe is available for checkout.';
+      if (availableCheckoutCount < premiumCheckoutButtons.length) {
+        premiumProviderHelp.textContent = 'Some checkout combinations are not configured yet. Disabled buttons reflect what is available right now.';
       } else {
-        premiumProviderHelp.textContent = 'You will be redirected to Stripe or PayPal to complete the subscription checkout.';
+        premiumProviderHelp.textContent = 'You will be redirected to Stripe or PayPal to complete the selected checkout.';
       }
     }
 
@@ -1298,13 +1321,14 @@
       renderBillingStatus(statusMessage);
     }
 
-    async function startPremiumCheckout(provider) {
+    async function startPremiumCheckout(provider, plan) {
       if (!authenticatedUser || authenticatedUser.isAdmin) {
         renderBillingStatus('Sign in with a regular account to purchase premium.');
         return;
       }
 
-      renderBillingStatus(`Opening ${provider === 'stripe' ? 'Stripe' : 'PayPal'} checkout...`);
+      const planLabel = plan === 'one-time' ? '30 day VIP' : 'monthly VIP';
+      renderBillingStatus(`Opening ${provider === 'stripe' ? 'Stripe' : 'PayPal'} checkout for ${planLabel}...`);
 
       try {
         const payload = await fetchJson('/api/billing/checkout', {
@@ -1312,7 +1336,7 @@
           headers: {
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ provider })
+          body: JSON.stringify({ provider, plan })
         });
 
         if (payload?.checkoutUrl) {
@@ -3170,93 +3194,131 @@
       refreshInfoTabIfActive();
     });
 
-    async function loadInfoEvents() {
-      try {
-        const response = await fetch('/api/info/events');
-        const payload = await response.json();
+    window.setInterval(() => {
+      refreshInfoTabIfActive();
+    }, infoEventsRefreshIntervalMs);
 
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.message || 'Failed to load info data.');
+    async function loadInfoEvents(force = false) {
+      const now = Date.now();
+      if (!force) {
+        if (infoEventsRequestInFlight) {
+          return infoEventsRequestInFlight;
         }
 
-        const byKey = {};
-        (payload.items || []).forEach((item) => {
-          byKey[item.key] = item;
-        });
-
-        bindSmallOilRigRealtime(byKey.smallOilRig);
-        bindLargeOilRigRealtime(byKey.largeOilRig);
-        infoCargoShip.innerHTML = formatEventValue(byKey.cargoShip);
-        infoChinook47.innerHTML = formatEventValue(byKey.chinook47);
-        infoPatrolHelicopter.innerHTML = formatEventValue(byKey.patrolHelicopter);
-        infoTravelingVendor.innerHTML = formatEventValue(byKey.travelingVendor);
-        infoDeepSea.innerHTML = formatEventValue(byKey.deepSea);
-
-        const refreshedAt = payload.refreshedAtUtc ? new Date(payload.refreshedAtUtc).toLocaleString() : null;
-        infoFootnote.textContent = refreshedAt ? `Last updated: ${refreshedAt}` : '';
-      } catch (error) {
-        infoSmallOilRig.textContent = 'Unavailable';
-        infoLargeOilRig.textContent = 'Unavailable';
-        infoCargoShip.textContent = 'Unavailable';
-        infoChinook47.textContent = 'Unavailable';
-        infoPatrolHelicopter.textContent = 'Unavailable';
-        infoTravelingVendor.textContent = 'Unavailable';
-        infoDeepSea.textContent = 'Unavailable';
-        infoFootnote.textContent = `Info fetch failed: ${error.message}`;
+        if ((now - infoEventsLastRequestedAtMs) < infoEventsRefreshIntervalMs) {
+          return null;
+        }
       }
+
+      infoEventsLastRequestedAtMs = now;
+      infoEventsRequestInFlight = (async () => {
+        try {
+          const response = await fetch('/api/info/events');
+          const payload = await response.json();
+
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || 'Failed to load info data.');
+          }
+
+          const byKey = {};
+          (payload.items || []).forEach((item) => {
+            byKey[item.key] = item;
+          });
+
+          bindSmallOilRigRealtime(byKey.smallOilRig);
+          bindLargeOilRigRealtime(byKey.largeOilRig);
+          infoCargoShip.innerHTML = formatEventValue(byKey.cargoShip);
+          infoChinook47.innerHTML = formatEventValue(byKey.chinook47);
+          infoPatrolHelicopter.innerHTML = formatEventValue(byKey.patrolHelicopter);
+          infoTravelingVendor.innerHTML = formatEventValue(byKey.travelingVendor);
+          infoDeepSea.innerHTML = formatEventValue(byKey.deepSea);
+
+          const refreshedAt = payload.refreshedAtUtc ? new Date(payload.refreshedAtUtc).toLocaleString() : null;
+          infoFootnote.textContent = refreshedAt ? `Last updated: ${refreshedAt}` : '';
+        } catch (error) {
+          infoSmallOilRig.textContent = 'Unavailable';
+          infoLargeOilRig.textContent = 'Unavailable';
+          infoCargoShip.textContent = 'Unavailable';
+          infoChinook47.textContent = 'Unavailable';
+          infoPatrolHelicopter.textContent = 'Unavailable';
+          infoTravelingVendor.textContent = 'Unavailable';
+          infoDeepSea.textContent = 'Unavailable';
+          infoFootnote.textContent = `Info fetch failed: ${error.message}`;
+        } finally {
+          infoEventsRequestInFlight = null;
+        }
+      })();
+
+      return infoEventsRequestInFlight;
     }
 
     async function loadTeamStatus() {
-      try {
-        const response = await fetch('/api/team/status');
-        const payload = await response.json();
-
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.message || 'Failed to load team info.');
-        }
-
-        latestTeamMembers = Array.isArray(payload.members) ? payload.members : [];
-        teamList.innerHTML = '';
-
-        latestTeamMembers.forEach((member) => {
-          const item = document.createElement('li');
-          item.className = 'team-row';
-
-          const leaderCrown = member.isLeader
-            ? '<span class="team-leader-crown" title="Team Leader">👑</span>'
-            : '';
-          const presenceSymbol = member.isOnline
-            ? '<span class="presence-dot online" title="Online"></span>'
-            : '<span class="presence-dot offline" title="Offline"></span>';
-          const deadSymbol = member.isAlive
-            ? ''
-            : '<span class="dead-symbol" title="Dead">💀</span>';
-
-          item.innerHTML = `
-            <div class="team-left">
-              <span class="team-name">${member.name}${leaderCrown}</span>
-            </div>
-            <div class="team-badges">
-              ${deadSymbol}
-              ${presenceSymbol}
-            </div>`;
-
-          teamList.appendChild(item);
-        });
-
-        if (latestTeamMembers.length === 0) {
-          teamList.innerHTML = '<li class="team-row"><span class="team-name">No team members found.</span></li>';
-        }
-
-        const refreshedAt = payload.refreshedAtUtc ? new Date(payload.refreshedAtUtc).toLocaleString() : null;
-        teamFootnote.textContent = refreshedAt ? `Team updated: ${refreshedAt}` : '';
-        renderPairingStatus();
-      } catch (error) {
-        latestTeamMembers = [];
-        teamList.innerHTML = '<li class="team-row"><span class="team-name">Unable to load team status.</span></li>';
-        teamFootnote.textContent = `Team fetch failed: ${error.message}`;
-        renderPairingStatus();
+      const now = Date.now();
+      if (teamStatusRequestInFlight) {
+        return teamStatusRequestInFlight;
       }
+
+      if ((now - teamStatusLastRequestedAtMs) < infoEventsRefreshIntervalMs) {
+        return null;
+      }
+
+      teamStatusLastRequestedAtMs = now;
+      teamStatusRequestInFlight = (async () => {
+        try {
+          const response = await fetch('/api/team/status');
+          const payload = await response.json();
+
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || 'Failed to load team info.');
+          }
+
+          latestTeamMembers = Array.isArray(payload.members) ? payload.members : [];
+          teamList.innerHTML = '';
+
+          latestTeamMembers.forEach((member) => {
+            const item = document.createElement('li');
+            item.className = 'team-row';
+
+            const leaderCrown = member.isLeader
+              ? '<span class="team-leader-crown" title="Team Leader">👑</span>'
+              : '';
+            const presenceSymbol = member.isOnline
+              ? '<span class="presence-dot online" title="Online"></span>'
+              : '<span class="presence-dot offline" title="Offline"></span>';
+            const deadSymbol = member.isAlive
+              ? ''
+              : '<span class="dead-symbol" title="Dead">💀</span>';
+
+            item.innerHTML = `
+              <div class="team-left">
+                <span class="team-name">${member.name}${leaderCrown}</span>
+              </div>
+              <div class="team-badges">
+                ${deadSymbol}
+                ${presenceSymbol}
+              </div>`;
+
+            teamList.appendChild(item);
+          });
+
+          if (latestTeamMembers.length === 0) {
+            teamList.innerHTML = '<li class="team-row"><span class="team-name">No team members found.</span></li>';
+          }
+
+          const refreshedAt = payload.refreshedAtUtc ? new Date(payload.refreshedAtUtc).toLocaleString() : null;
+          teamFootnote.textContent = refreshedAt ? `Team updated: ${refreshedAt}` : '';
+          renderPairingStatus();
+        } catch (error) {
+          latestTeamMembers = [];
+          teamList.innerHTML = '<li class="team-row"><span class="team-name">Unable to load team status.</span></li>';
+          teamFootnote.textContent = `Team fetch failed: ${error.message}`;
+          renderPairingStatus();
+        } finally {
+          teamStatusRequestInFlight = null;
+        }
+      })();
+
+      return teamStatusRequestInFlight;
     }
 
     function updateMapLegend(items) {
@@ -5524,11 +5586,10 @@
     pairingStopButton?.addEventListener('click', () => {
       stopPairingListener();
     });
-    premiumStripeButton?.addEventListener('click', () => {
-      startPremiumCheckout('stripe');
-    });
-    premiumPaypalButton?.addEventListener('click', () => {
-      startPremiumCheckout('paypal');
+    premiumCheckoutButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        startPremiumCheckout(button.dataset.provider, button.dataset.plan);
+      });
     });
 
     resetSwitchPairingUi();

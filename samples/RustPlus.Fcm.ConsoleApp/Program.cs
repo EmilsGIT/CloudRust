@@ -37,6 +37,8 @@ var rustPlusRequestTimeout = TimeSpan.FromSeconds(12);
 var rustPlusDisconnectTimeout = TimeSpan.FromSeconds(4);
 var listenerReconnectDelay = TimeSpan.FromSeconds(5);
 var directRustPlusRetryDelay = TimeSpan.FromMilliseconds(350);
+var infoEventsRefreshInterval = TimeSpan.FromSeconds(30);
+var infoEventsMapMetadataRefreshInterval = TimeSpan.FromMinutes(10);
 const int directRustPlusMaxAttempts = 3;
 const int debugEventLimit = 40;
 var mapRefreshInterval = TimeSpan.FromMinutes(1);
@@ -61,9 +63,13 @@ const string adminUserId = "__admin__";
 const string adminUsername = "admin";
 var webPrefixes = GetWebPrefixes();
 var adminPassword = GetEnvironmentVariableOrDefault("RUSTPLUS_ADMIN_PASSWORD", "uhs32syj");
-const int premiumPriceEurCents = 600;
+const int premiumOneTimePriceGbpPence = 700;
+const int premiumSubscriptionPriceGbpPence = 600;
 const int premiumDurationDays = 30;
-const string premiumProductName = "Cloud Rust Premium";
+const string premiumOneTimePlan = "one-time";
+const string premiumSubscriptionPlan = "subscription";
+const string premiumOneTimeProductName = "Cloud Rust VIP - 30 Days";
+const string premiumSubscriptionProductName = "Cloud Rust VIP - Monthly";
 var stripePublishableKey = (Environment.GetEnvironmentVariable("RUSTPLUS_STRIPE_PUBLISHABLE_KEY") ?? string.Empty).Trim();
 var stripeSecretKey = (Environment.GetEnvironmentVariable("RUSTPLUS_STRIPE_SECRET_KEY") ?? string.Empty).Trim();
 var stripeWebhookSecret = (Environment.GetEnvironmentVariable("RUSTPLUS_STRIPE_WEBHOOK_SECRET") ?? string.Empty).Trim();
@@ -2049,24 +2055,67 @@ async Task HandleBillingStatusRequestAsync(HttpListenerContext context, UserAcco
     await WriteJsonResponseAsync(context, 200, new
     {
         ok = true,
-        priceEur = 6,
-        billingPeriodDays = premiumDurationDays,
+        offers = new
+        {
+            oneTime = new
+            {
+                plan = premiumOneTimePlan,
+                price = 7,
+                currency = "GBP",
+                billingPeriodDays = premiumDurationDays,
+                label = "30 days VIP",
+                providers = new
+                {
+                    stripe = new
+                    {
+                        isConfigured = IsStripeConfigured(),
+                        label = "Stripe"
+                    },
+                    paypal = new
+                    {
+                        isConfigured = IsPayPalOneTimeConfigured(),
+                        label = "PayPal"
+                    }
+                }
+            },
+            subscription = new
+            {
+                plan = premiumSubscriptionPlan,
+                price = 6,
+                currency = "GBP",
+                billingPeriodMonths = 1,
+                label = "Monthly VIP",
+                providers = new
+                {
+                    stripe = new
+                    {
+                        isConfigured = IsStripeConfigured(),
+                        label = "Stripe"
+                    },
+                    paypal = new
+                    {
+                        isConfigured = IsPayPalSubscriptionConfigured(),
+                        label = "PayPal"
+                    }
+                }
+            }
+        },
         isVip = authenticatedUser.IsVip,
         vipProvider = authenticatedUser.VipProvider,
+        vipPlan = authenticatedUser.VipPlan,
         vipActivatedAtUtc = authenticatedUser.VipActivatedAtUtc,
+        vipExpiresAtUtc = authenticatedUser.VipExpiresAtUtc,
         providers = new
         {
             stripe = new
             {
-                isConfigured = !string.IsNullOrWhiteSpace(stripeSecretKey),
+                isConfigured = IsStripeConfigured(),
                 label = "Stripe",
                 publishableKey = string.IsNullOrWhiteSpace(stripePublishableKey) ? null : stripePublishableKey
             },
             paypal = new
             {
-                isConfigured = !string.IsNullOrWhiteSpace(paypalClientId)
-                    && !string.IsNullOrWhiteSpace(paypalClientSecret)
-                    && !string.IsNullOrWhiteSpace(paypalPlanId),
+                isConfigured = IsPayPalOneTimeConfigured() || IsPayPalSubscriptionConfigured(),
                 label = "PayPal"
             }
         }
@@ -2084,6 +2133,7 @@ async Task HandleBillingCheckoutRequestAsync(HttpListenerContext context, UserAc
 
     var request = await ReadJsonRequestAsync<BillingCheckoutRequest>(context);
     var provider = (request?.Provider ?? string.Empty).Trim().ToLowerInvariant();
+    var plan = NormalizePremiumPlan(request?.Plan);
     if (provider is not ("stripe" or "paypal"))
     {
         await WriteJsonResponseAsync(context, 400, new
@@ -2094,14 +2144,24 @@ async Task HandleBillingCheckoutRequestAsync(HttpListenerContext context, UserAc
         return;
     }
 
+    if (plan is null)
+    {
+        await WriteJsonResponseAsync(context, 400, new
+        {
+            ok = false,
+            message = "Choose either the 30 day VIP payment or the monthly subscription."
+        });
+        return;
+    }
+
     var baseUrl = GetRequestBaseUrl(context.Request);
 
     try
     {
         var checkoutUrl = provider switch
         {
-            "stripe" => await CreateStripeCheckoutUrlAsync(authenticatedUser, baseUrl),
-            "paypal" => await CreatePayPalCheckoutUrlAsync(authenticatedUser, baseUrl),
+            "stripe" => await CreateStripeCheckoutUrlAsync(authenticatedUser, baseUrl, plan),
+            "paypal" => await CreatePayPalCheckoutUrlAsync(authenticatedUser, baseUrl, plan),
             _ => null
         };
 
@@ -2110,9 +2170,7 @@ async Task HandleBillingCheckoutRequestAsync(HttpListenerContext context, UserAc
             await WriteJsonResponseAsync(context, 503, new
             {
                 ok = false,
-                message = provider == "stripe"
-                    ? "Stripe checkout is not configured yet. Set RUSTPLUS_STRIPE_SECRET_KEY."
-                    : "PayPal checkout is not configured yet. Set RUSTPLUS_PAYPAL_CLIENT_ID, RUSTPLUS_PAYPAL_CLIENT_SECRET, and RUSTPLUS_PAYPAL_PLAN_ID."
+                message = GetBillingConfigurationMessage(provider, plan)
             });
             return;
         }
@@ -2172,8 +2230,33 @@ async Task HandlePayPalBillingCompletionRequestAsync(HttpListenerContext context
         return;
     }
 
-    var subscriptionId = context.Request.QueryString["subscription_id"];
     var redirectBaseUrl = $"{GetRequestBaseUrl(context.Request)}/?provider=paypal";
+    var plan = NormalizePremiumPlan(context.Request.QueryString["plan"]);
+    if (string.Equals(plan, premiumOneTimePlan, StringComparison.Ordinal))
+    {
+        var orderId = (context.Request.QueryString["token"] ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(orderId))
+        {
+            await RedirectAsync(context, $"{redirectBaseUrl}&premium=failed");
+            return;
+        }
+
+        try
+        {
+            var activated = await ConfirmPayPalOneTimeOrderAsync(authenticatedUser, orderId);
+            await RedirectAsync(context, activated
+                ? $"{redirectBaseUrl}&premium=success"
+                : $"{redirectBaseUrl}&premium=failed");
+        }
+        catch
+        {
+            await RedirectAsync(context, $"{redirectBaseUrl}&premium=failed");
+        }
+
+        return;
+    }
+
+    var subscriptionId = context.Request.QueryString["subscription_id"];
     if (string.IsNullOrWhiteSpace(subscriptionId))
     {
         await RedirectAsync(context, $"{redirectBaseUrl}&premium=failed");
@@ -2934,6 +3017,11 @@ UserAccountRecord? TryGetAuthenticatedUser(HttpListenerRequest request)
         return null;
     }
 
+    if (TryExpireFixedVip(account))
+    {
+        SaveUserAccounts(usersFilePath, userAccountsStore);
+    }
+
     return account;
 }
 
@@ -2953,37 +3041,69 @@ bool IsStripeConfigured()
     return !string.IsNullOrWhiteSpace(stripeSecretKey);
 }
 
-bool IsPayPalConfigured()
+bool IsPayPalOneTimeConfigured()
 {
     return !string.IsNullOrWhiteSpace(paypalClientId)
-        && !string.IsNullOrWhiteSpace(paypalClientSecret)
+        && !string.IsNullOrWhiteSpace(paypalClientSecret);
+}
+
+bool IsPayPalSubscriptionConfigured()
+{
+    return IsPayPalOneTimeConfigured()
         && !string.IsNullOrWhiteSpace(paypalPlanId);
 }
 
-async Task<string?> CreateStripeCheckoutUrlAsync(UserAccountRecord user, string baseUrl)
+string? NormalizePremiumPlan(string? value)
+{
+    var plan = (value ?? string.Empty).Trim().ToLowerInvariant();
+    return plan is premiumOneTimePlan or premiumSubscriptionPlan ? plan : null;
+}
+
+string GetBillingConfigurationMessage(string provider, string plan)
+{
+    if (provider == "stripe")
+    {
+        return "Stripe checkout is not configured yet. Set RUSTPLUS_STRIPE_SECRET_KEY.";
+    }
+
+    return string.Equals(plan, premiumSubscriptionPlan, StringComparison.Ordinal)
+        ? "PayPal subscription checkout is not configured yet. Set RUSTPLUS_PAYPAL_CLIENT_ID, RUSTPLUS_PAYPAL_CLIENT_SECRET, and RUSTPLUS_PAYPAL_PLAN_ID."
+        : "PayPal checkout is not configured yet. Set RUSTPLUS_PAYPAL_CLIENT_ID and RUSTPLUS_PAYPAL_CLIENT_SECRET.";
+}
+
+async Task<string?> CreateStripeCheckoutUrlAsync(UserAccountRecord user, string baseUrl, string plan)
 {
     if (!IsStripeConfigured())
     {
         return null;
     }
 
+    var isSubscription = string.Equals(plan, premiumSubscriptionPlan, StringComparison.Ordinal);
     using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.stripe.com/v1/checkout/sessions");
     request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", stripeSecretKey);
-    request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+    var fields = new Dictionary<string, string>
     {
-        ["mode"] = "subscription",
+        ["mode"] = isSubscription ? "subscription" : "payment",
         ["success_url"] = $"{baseUrl}/api/billing/complete/stripe?session_id={{CHECKOUT_SESSION_ID}}",
         ["cancel_url"] = $"{baseUrl}/?premium=cancelled&provider=stripe",
         ["client_reference_id"] = user.Id,
         ["customer_email"] = user.Email,
         ["line_items[0][quantity]"] = "1",
-        ["line_items[0][price_data][currency]"] = "eur",
-        ["line_items[0][price_data][unit_amount]"] = premiumPriceEurCents.ToString(CultureInfo.InvariantCulture),
-        ["line_items[0][price_data][product_data][name]"] = premiumProductName,
-        ["line_items[0][price_data][recurring][interval]"] = "month",
+        ["line_items[0][price_data][currency]"] = "gbp",
+        ["line_items[0][price_data][unit_amount]"] = (isSubscription ? premiumSubscriptionPriceGbpPence : premiumOneTimePriceGbpPence).ToString(CultureInfo.InvariantCulture),
+        ["line_items[0][price_data][product_data][name]"] = isSubscription ? premiumSubscriptionProductName : premiumOneTimeProductName,
         ["metadata[userId]"] = user.Id,
-        ["subscription_data[metadata][userId]"] = user.Id
-    });
+        ["metadata[plan]"] = plan
+    };
+
+    if (isSubscription)
+    {
+        fields["line_items[0][price_data][recurring][interval]"] = "month";
+        fields["subscription_data[metadata][userId]"] = user.Id;
+        fields["subscription_data[metadata][plan]"] = plan;
+    }
+
+    request.Content = new FormUrlEncodedContent(fields);
 
     using var response = await loginHandlerHttpClient.SendAsync(request);
     var responseBody = await response.Content.ReadAsStringAsync();
@@ -3018,6 +3138,7 @@ async Task<bool> ConfirmStripeCheckoutAsync(UserAccountRecord authenticatedUser,
     using var document = JsonDocument.Parse(responseBody);
     var root = document.RootElement;
     var clientReferenceId = GetOptionalString(root, "client_reference_id");
+    var plan = NormalizePremiumPlan(TryGetNestedOptionalString(root, "metadata", "plan")) ?? premiumSubscriptionPlan;
     if (!string.Equals(clientReferenceId, authenticatedUser.Id, StringComparison.Ordinal))
     {
         return false;
@@ -3044,12 +3165,20 @@ async Task<bool> ConfirmStripeCheckoutAsync(UserAccountRecord authenticatedUser,
             : subscriptionElement.GetString();
     }
 
-    return await MarkUserVipAsync(authenticatedUser.Id, "stripe", subscriptionReference ?? sessionId);
+    var reference = string.IsNullOrWhiteSpace(subscriptionReference) ? sessionId : subscriptionReference;
+    return await MarkUserVipAsync(authenticatedUser.Id, "stripe", reference, plan);
 }
 
-async Task<string?> CreatePayPalCheckoutUrlAsync(UserAccountRecord user, string baseUrl)
+async Task<string?> CreatePayPalCheckoutUrlAsync(UserAccountRecord user, string baseUrl, string plan)
 {
-    if (!IsPayPalConfigured())
+    return string.Equals(plan, premiumSubscriptionPlan, StringComparison.Ordinal)
+        ? await CreatePayPalSubscriptionCheckoutUrlAsync(user, baseUrl)
+        : await CreatePayPalOneTimeCheckoutUrlAsync(user, baseUrl);
+}
+
+async Task<string?> CreatePayPalSubscriptionCheckoutUrlAsync(UserAccountRecord user, string baseUrl)
+{
+    if (!IsPayPalSubscriptionConfigured())
     {
         return null;
     }
@@ -3099,9 +3228,69 @@ async Task<string?> CreatePayPalCheckoutUrlAsync(UserAccountRecord user, string 
     return null;
 }
 
+async Task<string?> CreatePayPalOneTimeCheckoutUrlAsync(UserAccountRecord user, string baseUrl)
+{
+    if (!IsPayPalOneTimeConfigured())
+    {
+        return null;
+    }
+
+    var accessToken = await GetPayPalAccessTokenAsync();
+    using var request = new HttpRequestMessage(HttpMethod.Post, $"{paypalApiBaseUrl}/v2/checkout/orders");
+    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+    request.Content = JsonContent(new
+    {
+        intent = "CAPTURE",
+        purchase_units = new[]
+        {
+            new
+            {
+                custom_id = user.Id,
+                description = premiumOneTimeProductName,
+                amount = new
+                {
+                    currency_code = "GBP",
+                    value = "7.00"
+                }
+            }
+        },
+        application_context = new
+        {
+            brand_name = "Cloud Rust",
+            user_action = "PAY_NOW",
+            return_url = $"{baseUrl}/api/billing/complete/paypal?plan={premiumOneTimePlan}",
+            cancel_url = $"{baseUrl}/?premium=cancelled&provider=paypal"
+        }
+    });
+
+    using var response = await loginHandlerHttpClient.SendAsync(request);
+    var responseBody = await response.Content.ReadAsStringAsync();
+    if (!response.IsSuccessStatusCode)
+    {
+        throw new InvalidOperationException($"PayPal order creation failed: {responseBody}");
+    }
+
+    using var document = JsonDocument.Parse(responseBody);
+    if (!document.RootElement.TryGetProperty("links", out var linksElement) || linksElement.ValueKind != JsonValueKind.Array)
+    {
+        return null;
+    }
+
+    foreach (var link in linksElement.EnumerateArray())
+    {
+        var rel = GetOptionalString(link, "rel");
+        if (string.Equals(rel, "approve", StringComparison.OrdinalIgnoreCase))
+        {
+            return GetOptionalString(link, "href");
+        }
+    }
+
+    return null;
+}
+
 async Task<bool> ConfirmPayPalSubscriptionAsync(UserAccountRecord authenticatedUser, string subscriptionId)
 {
-    if (!IsPayPalConfigured())
+    if (!IsPayPalSubscriptionConfigured())
     {
         return false;
     }
@@ -3127,12 +3316,44 @@ async Task<bool> ConfirmPayPalSubscriptionAsync(UserAccountRecord authenticatedU
         return false;
     }
 
-    return await MarkUserVipAsync(authenticatedUser.Id, "paypal", subscriptionId);
+    return await MarkUserVipAsync(authenticatedUser.Id, "paypal", subscriptionId, premiumSubscriptionPlan);
+}
+
+async Task<bool> ConfirmPayPalOneTimeOrderAsync(UserAccountRecord authenticatedUser, string orderId)
+{
+    if (!IsPayPalOneTimeConfigured())
+    {
+        return false;
+    }
+
+    var accessToken = await GetPayPalAccessTokenAsync();
+    using var request = new HttpRequestMessage(HttpMethod.Post, $"{paypalApiBaseUrl}/v2/checkout/orders/{Uri.EscapeDataString(orderId)}/capture");
+    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+    request.Content = JsonContent(new { });
+
+    using var response = await loginHandlerHttpClient.SendAsync(request);
+    var responseBody = await response.Content.ReadAsStringAsync();
+    if (!response.IsSuccessStatusCode)
+    {
+        throw new InvalidOperationException($"PayPal order capture failed: {responseBody}");
+    }
+
+    using var document = JsonDocument.Parse(responseBody);
+    var root = document.RootElement;
+    var customId = TryGetArrayNestedOptionalString(root, "purchase_units", 0, "custom_id");
+    var status = GetOptionalString(root, "status");
+    if (!string.Equals(customId, authenticatedUser.Id, StringComparison.Ordinal)
+        || !string.Equals(status, "COMPLETED", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    return await MarkUserVipAsync(authenticatedUser.Id, "paypal", orderId, premiumOneTimePlan);
 }
 
 async Task<string> GetPayPalAccessTokenAsync()
 {
-    if (!IsPayPalConfigured())
+    if (!IsPayPalOneTimeConfigured())
     {
         throw new InvalidOperationException("PayPal is not configured.");
     }
@@ -3157,7 +3378,7 @@ async Task<string> GetPayPalAccessTokenAsync()
         ?? throw new InvalidOperationException("PayPal did not return an access token.");
 }
 
-async Task<bool> MarkUserVipAsync(string userId, string provider, string reference)
+async Task<bool> MarkUserVipAsync(string userId, string provider, string reference, string plan)
 {
     await userAccountsGate.WaitAsync();
     try
@@ -3170,9 +3391,13 @@ async Task<bool> MarkUserVipAsync(string userId, string provider, string referen
 
         account.IsVip = true;
         account.VipProvider = provider;
+        account.VipPlan = plan;
         account.VipReference = string.IsNullOrWhiteSpace(reference) ? account.VipReference : reference;
-        account.VipStatus = "active";
+        account.VipStatus = string.Equals(plan, premiumSubscriptionPlan, StringComparison.Ordinal) ? "active" : "active-fixed";
         account.VipActivatedAtUtc = DateTimeOffset.UtcNow;
+        account.VipExpiresAtUtc = string.Equals(plan, premiumOneTimePlan, StringComparison.Ordinal)
+            ? DateTimeOffset.UtcNow.AddDays(premiumDurationDays)
+            : null;
         SaveUserAccounts(usersFilePath, userAccountsStore);
         return true;
     }
@@ -3195,11 +3420,13 @@ async Task<bool> RevokeUserVipAsync(string userId, string provider, string? refe
 
         account.IsVip = false;
         account.VipProvider = provider;
+        account.VipPlan = premiumSubscriptionPlan;
         if (!string.IsNullOrWhiteSpace(reference))
         {
             account.VipReference = reference;
         }
         account.VipStatus = string.IsNullOrWhiteSpace(status) ? "inactive" : status;
+        account.VipExpiresAtUtc = null;
         SaveUserAccounts(usersFilePath, userAccountsStore);
         return true;
     }
@@ -3269,7 +3496,7 @@ async Task HandleStripeSubscriptionLifecycleEventAsync(JsonElement objectElement
 
     if (!string.IsNullOrWhiteSpace(activatedUserId))
     {
-        await MarkUserVipAsync(activatedUserId, "stripe", subscriptionId);
+        await MarkUserVipAsync(activatedUserId, "stripe", subscriptionId, premiumSubscriptionPlan);
     }
 }
 
@@ -3278,12 +3505,13 @@ async Task HandleStripeCheckoutCompletedEventAsync(JsonElement objectElement)
     var paymentStatus = GetOptionalString(objectElement, "payment_status") ?? string.Empty;
     var clientReferenceId = GetOptionalString(objectElement, "client_reference_id");
     var subscriptionReference = GetStripeSubscriptionReference(objectElement);
+    var plan = NormalizePremiumPlan(TryGetNestedOptionalString(objectElement, "metadata", "plan")) ?? premiumSubscriptionPlan;
 
     if (!string.IsNullOrWhiteSpace(clientReferenceId)
         && (string.Equals(paymentStatus, "paid", StringComparison.OrdinalIgnoreCase)
             || string.Equals(paymentStatus, "no_payment_required", StringComparison.OrdinalIgnoreCase)))
     {
-        await MarkUserVipAsync(clientReferenceId, "stripe", subscriptionReference ?? string.Empty);
+        await MarkUserVipAsync(clientReferenceId, "stripe", subscriptionReference ?? string.Empty, plan);
     }
 }
 
@@ -3343,6 +3571,46 @@ string? TryGetNestedOptionalString(JsonElement element, string propertyName, str
     }
 
     return GetOptionalString(nestedElement, nestedPropertyName);
+}
+
+string? TryGetArrayNestedOptionalString(JsonElement element, string propertyName, int index, string nestedPropertyName)
+{
+    if (!element.TryGetProperty(propertyName, out var arrayElement)
+        || arrayElement.ValueKind != JsonValueKind.Array
+        || index < 0)
+    {
+        return null;
+    }
+
+    var currentIndex = 0;
+    foreach (var item in arrayElement.EnumerateArray())
+    {
+        if (currentIndex == index)
+        {
+            return item.ValueKind == JsonValueKind.Object
+                ? GetOptionalString(item, nestedPropertyName)
+                : null;
+        }
+
+        currentIndex += 1;
+    }
+
+    return null;
+}
+
+bool TryExpireFixedVip(UserAccountRecord account)
+{
+    if (!account.IsVip
+        || !string.Equals(account.VipPlan, premiumOneTimePlan, StringComparison.Ordinal)
+        || account.VipExpiresAtUtc is null
+        || account.VipExpiresAtUtc > DateTimeOffset.UtcNow)
+    {
+        return false;
+    }
+
+    account.IsVip = false;
+    account.VipStatus = "expired";
+    return true;
 }
 
 (string Token, DateTimeOffset ExpiresAtUtc) CreateSession(string userId)
@@ -3773,6 +4041,14 @@ void InvalidateServerPairingCache(ListenerRuntime runtime)
     runtime.LatestServerPairing = null;
     runtime.MapCachePayloadBytes = null;
     runtime.MapCacheRefreshedAtUtc = DateTimeOffset.MinValue;
+    runtime.InfoEventsPayloadBytes = null;
+    runtime.InfoEventsPayloadRefreshedAtUtc = DateTimeOffset.MinValue;
+    runtime.InfoEventsMapMetadata = null;
+    runtime.InfoEventsMapMetadataRefreshedAtUtc = DateTimeOffset.MinValue;
+    runtime.TeamStatusPayloadBytes = null;
+    runtime.TeamStatusPayloadRefreshedAtUtc = DateTimeOffset.MinValue;
+    runtime.LastDeepSeaMarkerIds.Clear();
+    runtime.ActiveDeepSeaMarkerIds.Clear();
 
     try
     {
@@ -3905,31 +4181,40 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
         return;
     }
 
-    if (runtime.LatestServerPairing?.Data is null)
-    {
-        await WriteJsonResponseAsync(context, 400, new
-        {
-            ok = false,
-            message = "No server pairing is available yet. Pair a server in Rust+ first."
-        });
-        return;
-    }
-
-    var serverData = runtime.LatestServerPairing.Data;
-    if (!await EnsureServerReachableAsync(context, serverData.Ip, serverData.Port))
-    {
-        return;
-    }
-
-    var rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
+    RustPlusApi.RustPlus? rustPlus = null;
     var isConnected = false;
 
+    await runtime.InfoEventsGate.WaitAsync();
     try
     {
+        var requestStartedAtUtc = DateTimeOffset.UtcNow;
+        if (runtime.InfoEventsPayloadBytes is { Length: > 0 }
+            && requestStartedAtUtc - runtime.InfoEventsPayloadRefreshedAtUtc < infoEventsRefreshInterval)
+        {
+            await WriteJsonResponseBytesAsync(context, 200, runtime.InfoEventsPayloadBytes);
+            return;
+        }
+
+        if (runtime.LatestServerPairing?.Data is null)
+        {
+            await WriteJsonResponseAsync(context, 400, new
+            {
+                ok = false,
+                message = "No server pairing is available yet. Pair a server in Rust+ first."
+            });
+            return;
+        }
+
+        var serverData = runtime.LatestServerPairing.Data;
+        if (!await EnsureServerReachableAsync(context, serverData.Ip, serverData.Port))
+        {
+            return;
+        }
+
+        rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
         await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
         isConnected = true;
         var markersResponse = await rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout);
-        var mapResponse = await rustPlus.GetMapAsync().WaitAsync(rustPlusRequestTimeout);
 
         if (!markersResponse.IsSuccess || markersResponse.Data is null)
         {
@@ -3949,17 +4234,41 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
 
         var markers = markersResponse.Data;
         var now = DateTimeOffset.UtcNow;
-        var mapSize = Math.Max(
-            mapResponse.Data?.Width is uint mapWidth ? mapWidth : 0u,
-            mapResponse.Data?.Height is uint mapHeight ? mapHeight : 0u);
+        var mapMetadata = runtime.InfoEventsMapMetadata;
+        if (mapMetadata is null || now - runtime.InfoEventsMapMetadataRefreshedAtUtc >= infoEventsMapMetadataRefreshInterval)
+        {
+            var mapResponse = await rustPlus.GetMapAsync().WaitAsync(rustPlusRequestTimeout);
+            if (!mapResponse.IsSuccess || mapResponse.Data is null)
+            {
+                var errorMessage = mapResponse.Error?.Message ?? "Failed to fetch map.";
+                if (await TryWritePairingExpiredResponseAsync(context, runtime, errorMessage))
+                {
+                    return;
+                }
 
-        var smallOilRigMonument = mapResponse.IsSuccess && mapResponse.Data?.Monuments is not null
-            ? mapResponse.Data.Monuments.FirstOrDefault(IsSmallOilRigMonument)
-            : null;
+                await WriteJsonResponseAsync(context, 500, new
+                {
+                    ok = false,
+                    message = errorMessage
+                });
+                return;
+            }
 
-        var largeOilRigMonument = mapResponse.IsSuccess && mapResponse.Data?.Monuments is not null
-            ? mapResponse.Data.Monuments.FirstOrDefault(IsLargeOilRigMonument)
-            : null;
+            mapMetadata = new InfoEventsMapMetadata
+            {
+                MapWidth = mapResponse.Data.Width ?? 0u,
+                MapHeight = mapResponse.Data.Height ?? 0u,
+                SmallOilRigMonument = mapResponse.Data.Monuments?.FirstOrDefault(IsSmallOilRigMonument),
+                LargeOilRigMonument = mapResponse.Data.Monuments?.FirstOrDefault(IsLargeOilRigMonument)
+            };
+
+            runtime.InfoEventsMapMetadata = mapMetadata;
+            runtime.InfoEventsMapMetadataRefreshedAtUtc = now;
+        }
+
+        var mapSize = Math.Max(mapMetadata?.MapWidth ?? 0u, mapMetadata?.MapHeight ?? 0u);
+        var smallOilRigMonument = mapMetadata?.SmallOilRigMonument;
+        var largeOilRigMonument = mapMetadata?.LargeOilRigMonument;
 
         if (runtime.InfoEventsCache.SmallOilRigCountdownEndUtc.HasValue && runtime.InfoEventsCache.SmallOilRigCountdownEndUtc.Value <= now)
         {
@@ -4033,12 +4342,12 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
         var ch47Active = activeGeneralCh47Ids.Count > 0;
         var patrolHelicopterActive = markers.PatrolHelicopterMarkers.Count > 0;
         var vendorActive = markers.TravelingVendorMarkers.Count > 0;
-        var deepSeaCurrentMarkerIds = CollectDeepSeaMarkerIds(markers, mapResponse.Data?.Width, mapResponse.Data?.Height);
+        var deepSeaCurrentMarkerIds = CollectDeepSeaMarkerIds(markers, mapMetadata?.MapWidth, mapMetadata?.MapHeight);
         var newlyDetectedDeepSeaMarkerIds = deepSeaCurrentMarkerIds
             .Where(markerId => !runtime.LastDeepSeaMarkerIds.Contains(markerId))
             .ToHashSet();
 
-        if (newlyDetectedDeepSeaMarkerIds.Count > 3)
+        if (newlyDetectedDeepSeaMarkerIds.Count >= 3)
         {
             runtime.ActiveDeepSeaMarkerIds.Clear();
             foreach (var markerId in deepSeaCurrentMarkerIds)
@@ -4098,7 +4407,7 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
 
         SaveInfoEventsCache(runtime.InfoEventsCachePath, runtime.InfoEventsCache);
 
-        await WriteJsonResponseAsync(context, 200, new
+        var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
             ok = true,
             refreshedAtUtc = now,
@@ -4113,6 +4422,11 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
                 BuildInfoItem("deepSea", "The Deep Sea", deepSeaActive, runtime.InfoEventsCache.DeepSeaLastSeenUtc)
             }
         });
+
+        runtime.InfoEventsPayloadBytes = payloadBytes;
+        runtime.InfoEventsPayloadRefreshedAtUtc = now;
+
+        await WriteJsonResponseBytesAsync(context, 200, payloadBytes);
     }
     catch (TimeoutException)
     {
@@ -4133,11 +4447,12 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
     }
     finally
     {
+        runtime.InfoEventsGate.Release();
         if (isConnected)
         {
             try
             {
-                await rustPlus.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
+                await rustPlus!.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
             }
             catch
             {
@@ -4165,27 +4480,37 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
         return;
     }
 
-    if (runtime.LatestServerPairing?.Data is null)
-    {
-        await WriteJsonResponseAsync(context, 400, new
-        {
-            ok = false,
-            message = "No server pairing is available yet. Pair a server in Rust+ first."
-        });
-        return;
-    }
-
-    var serverData = runtime.LatestServerPairing.Data;
-    if (!await EnsureServerReachableAsync(context, serverData.Ip, serverData.Port))
-    {
-        return;
-    }
-
-    var rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
+    RustPlusApi.RustPlus? rustPlus = null;
     var isConnected = false;
 
+    await runtime.TeamStatusGate.WaitAsync();
     try
     {
+        var requestStartedAtUtc = DateTimeOffset.UtcNow;
+        if (runtime.TeamStatusPayloadBytes is { Length: > 0 }
+            && requestStartedAtUtc - runtime.TeamStatusPayloadRefreshedAtUtc < infoEventsRefreshInterval)
+        {
+            await WriteJsonResponseBytesAsync(context, 200, runtime.TeamStatusPayloadBytes);
+            return;
+        }
+
+        if (runtime.LatestServerPairing?.Data is null)
+        {
+            await WriteJsonResponseAsync(context, 400, new
+            {
+                ok = false,
+                message = "No server pairing is available yet. Pair a server in Rust+ first."
+            });
+            return;
+        }
+
+        var serverData = runtime.LatestServerPairing.Data;
+        if (!await EnsureServerReachableAsync(context, serverData.Ip, serverData.Port))
+        {
+            return;
+        }
+
+        rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
         await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
         isConnected = true;
         var teamResponse = await rustPlus.GetTeamInfoAsync().WaitAsync(rustPlusRequestTimeout);
@@ -4219,12 +4544,17 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
             })
             .ToList();
 
-        await WriteJsonResponseAsync(context, 200, new
+        var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
             ok = true,
             refreshedAtUtc = DateTimeOffset.UtcNow,
             members
         });
+
+        runtime.TeamStatusPayloadBytes = payloadBytes;
+        runtime.TeamStatusPayloadRefreshedAtUtc = DateTimeOffset.UtcNow;
+
+        await WriteJsonResponseBytesAsync(context, 200, payloadBytes);
     }
     catch (TimeoutException)
     {
@@ -4245,11 +4575,12 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
     }
     finally
     {
+        runtime.TeamStatusGate.Release();
         if (isConnected)
         {
             try
             {
-                await rustPlus.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
+                await rustPlus!.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
             }
             catch
             {
@@ -4874,11 +5205,17 @@ static HashSet<uint> CollectDeepSeaMarkerIds(
         return [];
     }
 
-    var edgeMargin = MathF.Max(325f, MathF.Min(width, height) * 0.18f);
-    var deepSeaMarkerIds = new HashSet<uint>();
+    var mapSize = MathF.Min(width, height);
+    var edgeMargin = MathF.Max(120f, mapSize * 0.045f);
+    var clusterRadius = MathF.Max(170f, mapSize * 0.03f);
+    var candidates = new List<(uint MarkerId, float X, float Y, string Edge)>();
 
-    static void AddOffshoreMarkerIds<TMarker>(IEnumerable<TMarker> markerSet, uint width, uint height, float edgeMargin, HashSet<uint> target)
-        where TMarker : RustPlusApi.Data.Markers.Marker
+    static void AddOffshoreVendingCandidates(
+        IEnumerable<RustPlusApi.Data.Markers.VendingMachineMarker> markerSet,
+        uint width,
+        uint height,
+        float edgeMargin,
+        List<(uint MarkerId, float X, float Y, string Edge)> target)
     {
         foreach (var marker in markerSet)
         {
@@ -4887,25 +5224,49 @@ static HashSet<uint> CollectDeepSeaMarkerIds(
                 continue;
             }
 
-            if (IsNearMapEdge(markerX, markerY, width, height, edgeMargin))
+            if (TryGetNearestMapEdge(markerX, markerY, width, height, edgeMargin, out var nearestEdge))
             {
-                target.Add(markerId);
+                target.Add((markerId, markerX, markerY, nearestEdge));
             }
         }
     }
 
-    AddOffshoreMarkerIds(markers.VendingMachineMarkers.Values, width, height, edgeMargin, deepSeaMarkerIds);
-    AddOffshoreMarkerIds(markers.TravelingVendorMarkers.Values, width, height, edgeMargin, deepSeaMarkerIds);
+    AddOffshoreVendingCandidates(markers.VendingMachineMarkers.Values, width, height, edgeMargin, candidates);
 
-    return deepSeaMarkerIds;
+    var bestCluster = candidates
+        .GroupBy(candidate => candidate.Edge)
+        .SelectMany(edgeGroup => edgeGroup.Select(seed => edgeGroup
+            .Where(candidate => Distance(seed.X, seed.Y, candidate.X, candidate.Y) <= clusterRadius)
+            .ToList()))
+        .OrderByDescending(cluster => cluster.Count)
+        .FirstOrDefault();
+
+    if (bestCluster is null || bestCluster.Count < 3)
+    {
+        return [];
+    }
+
+    return bestCluster.Select(candidate => candidate.MarkerId).ToHashSet();
 }
 
-static bool IsNearMapEdge(float x, float y, uint mapWidth, uint mapHeight, float edgeMargin)
+static bool TryGetNearestMapEdge(float x, float y, uint mapWidth, uint mapHeight, float edgeMargin, out string nearestEdge)
 {
-    return x <= edgeMargin
-           || y <= edgeMargin
-           || x >= mapWidth - edgeMargin
-           || y >= mapHeight - edgeMargin;
+    var leftDistance = x;
+    var topDistance = y;
+    var rightDistance = mapWidth - x;
+    var bottomDistance = mapHeight - y;
+
+    var edgeDistances = new (string Edge, float Distance)[]
+    {
+        ("left", leftDistance),
+        ("top", topDistance),
+        ("right", rightDistance),
+        ("bottom", bottomDistance)
+    };
+
+    var closestEdge = edgeDistances.OrderBy(entry => entry.Distance).First();
+    nearestEdge = closestEdge.Edge;
+    return closestEdge.Distance <= edgeMargin;
 }
 
 static string FormatSince(DateTimeOffset? lastSeenUtc, bool isActive)
@@ -5442,6 +5803,7 @@ file sealed class AuthCredentialsRequest
 file sealed class BillingCheckoutRequest
 {
     public string? Provider { get; set; }
+    public string? Plan { get; set; }
 }
 
 file sealed class UserStorageRequest
@@ -5472,9 +5834,11 @@ file sealed class UserAccountRecord
     public bool IsAdmin { get; set; }
     public bool IsVip { get; set; }
     public string? VipProvider { get; set; }
+    public string? VipPlan { get; set; }
     public string? VipReference { get; set; }
     public string? VipStatus { get; set; }
     public DateTimeOffset? VipActivatedAtUtc { get; set; }
+    public DateTimeOffset? VipExpiresAtUtc { get; set; }
     public string? LastKnownIp { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset? LastLoginAtUtc { get; set; }
@@ -5538,6 +5902,14 @@ file sealed class Ch47Track
     public Ch47SpawnClassification SpawnClassification { get; set; }
 }
 
+file sealed class InfoEventsMapMetadata
+{
+    public uint MapWidth { get; set; }
+    public uint MapHeight { get; set; }
+    public RustPlusApi.Data.ServerMapMonument? SmallOilRigMonument { get; set; }
+    public RustPlusApi.Data.ServerMapMonument? LargeOilRigMonument { get; set; }
+}
+
 file sealed class ListenerRuntime
 {
     public string UserId { get; set; } = string.Empty;
@@ -5560,6 +5932,14 @@ file sealed class ListenerRuntime
     public ConcurrentDictionary<uint, Ch47Track> Ch47Tracks { get; } = new();
     public HashSet<uint> LastDeepSeaMarkerIds { get; } = [];
     public HashSet<uint> ActiveDeepSeaMarkerIds { get; } = [];
+    public SemaphoreSlim InfoEventsGate { get; } = new(1, 1);
+    public DateTimeOffset InfoEventsPayloadRefreshedAtUtc { get; set; } = DateTimeOffset.MinValue;
+    public byte[]? InfoEventsPayloadBytes { get; set; }
+    public DateTimeOffset InfoEventsMapMetadataRefreshedAtUtc { get; set; } = DateTimeOffset.MinValue;
+    public InfoEventsMapMetadata? InfoEventsMapMetadata { get; set; }
+    public SemaphoreSlim TeamStatusGate { get; } = new(1, 1);
+    public DateTimeOffset TeamStatusPayloadRefreshedAtUtc { get; set; } = DateTimeOffset.MinValue;
+    public byte[]? TeamStatusPayloadBytes { get; set; }
     public SemaphoreSlim MapCacheGate { get; } = new(1, 1);
     public DateTimeOffset MapCacheRefreshedAtUtc { get; set; } = DateTimeOffset.MinValue;
     public byte[]? MapCachePayloadBytes { get; set; }

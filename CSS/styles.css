@@ -120,7 +120,7 @@ body.auth-locked {
 
 .premium-layout {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .premium-card {
@@ -149,6 +149,53 @@ body.auth-locked {
   margin: 0;
   color: #d8d8d8;
   line-height: 1.6;
+}
+
+.premium-offer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.premium-offer-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.premium-offer-card-featured {
+  background:
+    radial-gradient(circle at top right, rgba(230, 164, 77, 0.16), transparent 36%),
+    rgba(255, 255, 255, 0.05);
+  border-color: rgba(216, 178, 138, 0.28);
+}
+
+.premium-offer-header {
+  display: grid;
+  gap: 6px;
+}
+
+.premium-offer-kicker {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #b6b6b6;
+}
+
+.premium-offer-title {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.premium-offer-copy {
+  margin: 0;
+  color: #d0d0d0;
+  line-height: 1.55;
 }
 
 .premium-status-strip {
@@ -197,6 +244,10 @@ body.auth-locked {
   gap: 14px;
 }
 
+.premium-provider-grid-offer {
+  margin-top: auto;
+}
+
 .premium-provider-button {
   min-height: 52px;
   font-size: 15px;
@@ -215,6 +266,10 @@ body.auth-locked {
 @media (max-width: 640px) {
   .premium-card {
     padding: 22px;
+  }
+
+  .premium-offer-grid {
+    grid-template-columns: 1fr;
   }
 
   .premium-status-strip {
@@ -593,6 +648,34 @@ body.auth-locked {
   min-height: 100vh;
 }
 
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  margin: 0 0 14px 0;
+  border-radius: 999px;
+  background: rgba(32, 32, 32, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px);
+}
+
+.app-brand-logo {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  display: block;
+}
+
+.app-brand-text {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: #f2f2f2;
+}
+
 .sidebar {
   flex: 0 0 260px;
   display: flex;
@@ -856,6 +939,20 @@ body.auth-locked {
 }
 
 @media (max-width: 900px) {
+  .app-brand {
+    padding: 6px 10px;
+    gap: 8px;
+  }
+
+  .app-brand-logo {
+    width: 28px;
+    height: 28px;
+  }
+
+  .app-brand-text {
+    font-size: 15px;
+  }
+
   .live-observer-panel {
     width: 100%;
   }
