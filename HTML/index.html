@@ -99,7 +99,7 @@
           <div class="info-card">
             <h3 class="team-title">Event Information</h3>
             <ul class="info-list">
-              <li class="info-row"><span class="event-label"><img src="../Icons/Smallrig.png" alt="Small Oil Rig" class="event-icon" />Small Oil Rig Event</span><span id="infoSmallOilRig">Not available in Rust+ API yet</span></li>
+              <li class="info-row"><span class="event-label"><img id="smallOilRigSecretButton" src="../Icons/Smallrig.png" alt="Small Oil Rig" class="event-icon" />Small Oil Rig Event</span><span id="infoSmallOilRig">Not available in Rust+ API yet</span></li>
               <li class="info-row"><span class="event-label"><img src="../Icons/Largerig.png" alt="Large Oil Rig" class="event-icon" />Large Oil Rig Event</span><span id="infoLargeOilRig">Not available in Rust+ API yet</span></li>
               <li class="info-row"><span class="event-label"><img src="../Icons/cargo.png" alt="Cargoship Left" class="event-icon" />Cargoship Event</span><span id="infoCargoShip">Loading...</span></li>
               <li class="info-row"><span class="event-label"><img src="../Icons/chinook47.png" alt="Chinook 47 Locked Crate" class="event-icon" />Chinook 47 Locked Crate Event</span><span id="infoChinook47">Loading...</span></li>
@@ -799,6 +799,7 @@
       let previewMonitorCursorPoint = null;
       let draftMonitorWiringJoints = [];
     const infoSmallOilRig = document.getElementById('infoSmallOilRig');
+    const smallOilRigSecretButton = document.getElementById('smallOilRigSecretButton');
     const infoLargeOilRig = document.getElementById('infoLargeOilRig');
     const infoCargoShip = document.getElementById('infoCargoShip');
     const infoChinook47 = document.getElementById('infoChinook47');
@@ -929,6 +930,7 @@
     let teamStatusRequestInFlight = null;
     let teamStatusLastRequestedAtMs = 0;
     let latestMapPayload = null;
+    let secretBugsAccessUnlocked = false;
     const mapImagePromiseCache = new Map();
     let mapRenderContext = null;
     let mapDebugLastClick = null;
@@ -1183,6 +1185,7 @@
     function updateAuthUi() {
       const isAdminUser = Boolean(authenticatedUser?.isAdmin);
       const isAuthenticated = Boolean(authenticatedUser);
+      const canAccessBugsTab = isAdminUser || (isAuthenticated && secretBugsAccessUnlocked);
       const vipBadge = authenticatedUser?.isVip ? ' (VIP)' : '';
 
       if (authShell) {
@@ -1217,7 +1220,8 @@
         let shouldHide = !isAuthenticated;
         if (isAuthenticated) {
           shouldHide = (isAdminUser && tabName === 'buy-premium')
-            || (!isAdminUser && (tabName === 'bugs' || tabName === 'admin'));
+            || (tabName === 'admin' && !isAdminUser)
+            || (tabName === 'bugs' && !canAccessBugsTab);
         }
 
         tab.hidden = shouldHide;
@@ -1251,7 +1255,8 @@
         return;
       }
 
-      if (!isAdminUser && (activePanel?.dataset.panel === 'bugs' || activePanel?.dataset.panel === 'admin')) {
+      if ((activePanel?.dataset.panel === 'bugs' && !canAccessBugsTab)
+        || (activePanel?.dataset.panel === 'admin' && !isAdminUser)) {
         setActiveTab('info');
         return;
       }
@@ -3135,7 +3140,9 @@
     }
 
     function setActiveTab(tabName) {
-      if (tabName === 'bugs' && !authenticatedUser?.isAdmin) {
+      const canAccessBugsTab = Boolean(authenticatedUser?.isAdmin || (authenticatedUser && secretBugsAccessUnlocked));
+
+      if (tabName === 'bugs' && !canAccessBugsTab) {
         tabName = authenticatedUser && !authenticatedUser.isAdmin ? 'info' : 'info';
       }
 
@@ -5886,6 +5893,16 @@
       if (latestMapPayload) {
         await renderMap(latestMapPayload);
       }
+    });
+
+    smallOilRigSecretButton?.addEventListener('dblclick', () => {
+      if (!authenticatedUser || authenticatedUser.isAdmin) {
+        return;
+      }
+
+      secretBugsAccessUnlocked = true;
+      updateAuthUi();
+      setActiveTab('bugs');
     });
 
     switchForm.addEventListener('submit', (event) => {
