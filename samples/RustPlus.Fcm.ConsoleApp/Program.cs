@@ -166,6 +166,22 @@ ListenerRuntime GetListenerRuntime(string userId)
     }, new { userDataDirectoryPath });
 }
 
+ListenerRuntime? ResolveMapRuntime(UserAccountRecord authenticatedUser)
+{
+    if (!authenticatedUser.IsAdmin)
+    {
+        return GetListenerRuntime(authenticatedUser.Id);
+    }
+
+    var pairedRuntime = userAccountsStore.Users
+        .OrderByDescending(user => user.LastLoginAtUtc ?? DateTimeOffset.MinValue)
+        .ThenByDescending(user => user.CreatedAtUtc)
+        .Select(user => GetListenerRuntime(user.Id))
+        .FirstOrDefault(runtime => runtime.LatestServerPairing?.Data is not null);
+
+    return pairedRuntime;
+}
+
 UserAccountRecord? TryGetUserAccountById(string userId)
 {
     if (string.Equals(userId, adminUserId, StringComparison.Ordinal))
@@ -4686,7 +4702,18 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
         return;
     }
 
-    var runtime = GetListenerRuntime(authenticatedUser.Id);
+    var runtime = ResolveMapRuntime(authenticatedUser);
+    if (runtime is null)
+    {
+        await WriteJsonResponseAsync(context, 400, new
+        {
+            ok = false,
+            message = authenticatedUser.IsAdmin
+                ? "No paired non-admin user is available yet. Pair a server in Rust+ first."
+                : "No server pairing is available yet. Pair a server in Rust+ first."
+        });
+        return;
+    }
 
     if (!context.Request.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase))
     {
@@ -4700,7 +4727,9 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
         await WriteJsonResponseAsync(context, 400, new
         {
             ok = false,
-            message = "No server pairing is available yet. Pair a server in Rust+ first."
+            message = authenticatedUser.IsAdmin
+                ? "No paired non-admin user is available yet. Pair a server in Rust+ first."
+                : "No server pairing is available yet. Pair a server in Rust+ first."
         });
         return;
     }
