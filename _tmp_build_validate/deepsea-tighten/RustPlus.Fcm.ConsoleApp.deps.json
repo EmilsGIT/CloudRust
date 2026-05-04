@@ -1,0 +1,107 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "RustPlus.Fcm.ConsoleApp/1.0.0": {
+        "dependencies": {
+          "RustPlusApi": "1.4.0",
+          "RustPlusApi.Fcm": "1.4.0"
+        },
+        "runtime": {
+          "RustPlus.Fcm.ConsoleApp.dll": {}
+        }
+      },
+      "Google.Protobuf/3.33.5": {
+        "runtime": {
+          "lib/net5.0/Google.Protobuf.dll": {
+            "assemblyVersion": "3.33.5.0",
+            "fileVersion": "3.33.5.0"
+          }
+        }
+      },
+      "protobuf-net/3.2.56": {
+        "dependencies": {
+          "protobuf-net.Core": "3.2.56"
+        },
+        "runtime": {
+          "lib/net8.0/protobuf-net.dll": {
+            "assemblyVersion": "3.0.0.0",
+            "fileVersion": "3.2.56.57311"
+          }
+        }
+      },
+      "protobuf-net.Core/3.2.56": {
+        "runtime": {
+          "lib/net8.0/protobuf-net.Core.dll": {
+            "assemblyVersion": "3.0.0.0",
+            "fileVersion": "3.2.56.57311"
+          }
+        }
+      },
+      "RustPlusApi/1.4.0": {
+        "dependencies": {
+          "Google.Protobuf": "3.33.5"
+        },
+        "runtime": {
+          "RustPlusApi.dll": {
+            "assemblyVersion": "1.4.0",
+            "fileVersion": "1.4.0.0"
+          }
+        }
+      },
+      "RustPlusApi.Fcm/1.4.0": {
+        "dependencies": {
+          "protobuf-net": "3.2.56"
+        },
+        "runtime": {
+          "RustPlusApi.Fcm.dll": {
+            "assemblyVersion": "1.4.0",
+            "fileVersion": "1.4.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "RustPlus.Fcm.ConsoleApp/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Google.Protobuf/3.33.5": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-XEzLpCTosZb5I6eGSPn7rAES0VfkJkn3Cqydh0W39POdZwkdhPhOmAROTFJF9g0ardst4ulNXRm/q/iXwNu+Qw==",
+      "path": "google.protobuf/3.33.5",
+      "hashPath": "google.protobuf.3.33.5.nupkg.sha512"
+    },
+    "protobuf-net/3.2.56": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-4IPJeTYAMNewlN8MDaFkcmR/9hLhJeo9eARnTh104zh7mf+vXT2gu5MUfUnkSQU+CH578Q6vcdU7LQDQPG6eaw==",
+      "path": "protobuf-net/3.2.56",
+      "hashPath": "protobuf-net.3.2.56.nupkg.sha512"
+    },
+    "protobuf-net.Core/3.2.56": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-d6QOukTpDzs7zZv9tPnBZMtvHDNeHJQXUhMx54g4urUQsXK3oo9U70H9HvklYq7hlQ4A7AHJl7EVEqyCXXIl8Q==",
+      "path": "protobuf-net.core/3.2.56",
+      "hashPath": "protobuf-net.core.3.2.56.nupkg.sha512"
+    },
+    "RustPlusApi/1.4.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "RustPlusApi.Fcm/1.4.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}
