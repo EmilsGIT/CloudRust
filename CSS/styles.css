@@ -1582,8 +1582,34 @@ body.auth-locked {
   font-size: 13px;
 }
 
+.bugs-layout {
+  display: grid;
+  gap: 16px;
+}
+
 .map-card {
   width: min(980px, 100%);
+}
+
+.map-debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.map-debug-toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #e6e6e6;
+  font-size: 14px;
+}
+
+.map-debug-toggle-row input {
+  width: 16px;
+  height: 16px;
 }
 
 .map-status {
@@ -1603,6 +1629,20 @@ body.auth-locked {
 
 .map-legend {
   margin-top: 12px;
+}
+
+.map-debug-panel {
+  margin-top: 12px;
+  padding: 12px;
+  min-height: 92px;
+  border: 1px solid #555555;
+  border-radius: 8px;
+  background: #262626;
+  color: #d8d8d8;
+  font-family: Cascadia Mono, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .my-system-card {

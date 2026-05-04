@@ -362,39 +362,58 @@
       </section>
 
       <section class="tab-panel" data-panel="bugs">
-        <div class="info-card live-observer-tab-card">
-          <section id="liveObserverPanel" class="live-observer-panel" aria-live="polite">
-            <div class="live-observer-header">
-              <div class="live-observer-title-row">
-                <span id="liveObserverDot" class="live-observer-dot" data-state="connecting" aria-hidden="true"></span>
-                <strong>Live Feed</strong>
+        <div class="bugs-layout">
+          <div class="info-card live-observer-tab-card">
+            <section id="liveObserverPanel" class="live-observer-panel" aria-live="polite">
+              <div class="live-observer-header">
+                <div class="live-observer-title-row">
+                  <span id="liveObserverDot" class="live-observer-dot" data-state="connecting" aria-hidden="true"></span>
+                  <strong>Live Feed</strong>
+                </div>
+                <span id="liveObserverConnection" class="live-observer-connection">Connecting...</span>
               </div>
-              <span id="liveObserverConnection" class="live-observer-connection">Connecting...</span>
-            </div>
-            <div class="live-observer-grid">
-              <div class="live-observer-metric">
-                <span>Last event</span>
-                <strong id="liveObserverEvent">None yet</strong>
+              <div class="live-observer-grid">
+                <div class="live-observer-metric">
+                  <span>Last event</span>
+                  <strong id="liveObserverEvent">None yet</strong>
+                </div>
+                <div class="live-observer-metric">
+                  <span>Entity ID</span>
+                  <strong id="liveObserverEntity">-</strong>
+                </div>
+                <div class="live-observer-metric live-observer-metric-wide">
+                  <span>Updated</span>
+                  <strong id="liveObserverTimestamp">-</strong>
+                </div>
               </div>
-              <div class="live-observer-metric">
-                <span>Entity ID</span>
-                <strong id="liveObserverEntity">-</strong>
-              </div>
-              <div class="live-observer-metric live-observer-metric-wide">
-                <span>Updated</span>
-                <strong id="liveObserverTimestamp">-</strong>
-              </div>
-            </div>
-            <ul id="liveObserverLog" class="live-observer-log">
-              <li class="live-observer-log-empty">Waiting for stream activity...</li>
-            </ul>
-            <div class="live-observer-backend-feed">
-              <h3 class="team-title live-observer-backend-title">Backend Pairing Feed</h3>
-              <ul id="liveObserverBackendFeed" class="live-observer-log">
-                <li class="live-observer-log-empty">Waiting for backend pairing events...</li>
+              <ul id="liveObserverLog" class="live-observer-log">
+                <li class="live-observer-log-empty">Waiting for stream activity...</li>
               </ul>
+              <div class="live-observer-backend-feed">
+                <h3 class="team-title live-observer-backend-title">Backend Pairing Feed</h3>
+                <ul id="liveObserverBackendFeed" class="live-observer-log">
+                  <li class="live-observer-log-empty">Waiting for backend pairing events...</li>
+                </ul>
+              </div>
+            </section>
+          </div>
+
+          <div class="info-card map-card">
+            <div class="map-debug-header">
+              <div>
+                <h3 class="team-title">Map Debug</h3>
+                <p id="mapStatus" class="map-status">Waiting to load map debug.</p>
+              </div>
+              <label class="map-debug-toggle-row" for="mapDebugToggle">
+                <input id="mapDebugToggle" type="checkbox" />
+                <span>Show oil rig trajectory checks</span>
+              </label>
             </div>
-          </section>
+            <canvas id="mapCanvas" class="map-canvas" width="900" height="900"></canvas>
+            <ul id="mapLegend" class="info-list map-legend"></ul>
+            <pre id="mapDebugPanel" class="map-debug-panel"></pre>
+            <p id="mapFootnote" class="info-footnote"></p>
+          </div>
         </div>
       </section>
 
@@ -3152,7 +3171,11 @@
         loadBillingStatus();
       }
 
-      ensureMapAutoRefresh(false);
+      if (tabName === 'bugs' && authenticatedUser?.isAdmin) {
+        loadMapData();
+      }
+
+      ensureMapAutoRefresh(tabName === 'bugs' && Boolean(authenticatedUser?.isAdmin));
     }
 
     tabs.forEach((tab) => {
@@ -3393,6 +3416,185 @@
       return (normalized * projection.worldHeight) - projection.oceanMargin;
     }
 
+    function getClippedInfiniteLinePoints(startX, startY, endX, endY, projection) {
+      const minX = 0;
+      const maxX = Number(projection?.mapWidth) || 0;
+      const minY = 0;
+      const maxY = Number(projection?.mapHeight) || 0;
+      const deltaX = endX - startX;
+      const deltaY = endY - startY;
+      const epsilon = 0.0001;
+
+      if ((Math.abs(deltaX) < epsilon && Math.abs(deltaY) < epsilon) || maxX <= minX || maxY <= minY) {
+        return null;
+      }
+
+      const candidates = [];
+      const addCandidate = (t, x, y) => {
+        if (!Number.isFinite(t) || !Number.isFinite(x) || !Number.isFinite(y)) {
+          return;
+        }
+
+        if (x < (minX - epsilon) || x > (maxX + epsilon) || y < (minY - epsilon) || y > (maxY + epsilon)) {
+          return;
+        }
+
+        if (candidates.some((candidate) => Math.abs(candidate.x - x) < epsilon && Math.abs(candidate.y - y) < epsilon)) {
+          return;
+        }
+
+        candidates.push({ t, x, y });
+      };
+
+      if (Math.abs(deltaX) >= epsilon) {
+        const leftT = (minX - startX) / deltaX;
+        addCandidate(leftT, minX, startY + (leftT * deltaY));
+
+        const rightT = (maxX - startX) / deltaX;
+        addCandidate(rightT, maxX, startY + (rightT * deltaY));
+      }
+
+      if (Math.abs(deltaY) >= epsilon) {
+        const topT = (minY - startY) / deltaY;
+        addCandidate(topT, startX + (topT * deltaX), minY);
+
+        const bottomT = (maxY - startY) / deltaY;
+        addCandidate(bottomT, startX + (bottomT * deltaX), maxY);
+      }
+
+      if (candidates.length < 2) {
+        return null;
+      }
+
+      candidates.sort((left, right) => left.t - right.t);
+      return [candidates[0], candidates[candidates.length - 1]];
+    }
+
+    function getCh47DebugStroke(debugTrack) {
+      if (debugTrack?.intersectsSmallOilRig && debugTrack?.intersectsLargeOilRig) {
+        return 'rgba(255, 255, 255, 0.92)';
+      }
+
+      if (debugTrack?.intersectsSmallOilRig) {
+        return 'rgba(255, 184, 76, 0.92)';
+      }
+
+      if (debugTrack?.intersectsLargeOilRig) {
+        return 'rgba(106, 214, 255, 0.92)';
+      }
+
+      return 'rgba(220, 220, 220, 0.72)';
+    }
+
+    function drawMapDebugGeometry(context, projection) {
+      if (!mapDebugToggle?.checked) {
+        return;
+      }
+
+      const debug = projection?.debug;
+      if (!debug) {
+        return;
+      }
+
+      const oilRigs = Array.isArray(debug.oilRigs) ? debug.oilRigs : [];
+      const ch47Tracks = Array.isArray(debug.ch47Tracks) ? debug.ch47Tracks : [];
+      const activationRadiusX = (Number(debug.oilRigActivationDistance) || 0) * projection.scaleX;
+      const activationRadiusY = (Number(debug.oilRigActivationDistance) || 0) * projection.scaleY;
+      const intersectionRadiusX = (Number(debug.oilRigIntersectionRadius) || 0) * projection.scaleX;
+      const intersectionRadiusY = (Number(debug.oilRigIntersectionRadius) || 0) * projection.scaleY;
+
+      oilRigs.forEach((oilRig) => {
+        if (typeof oilRig?.x !== 'number' || typeof oilRig?.y !== 'number') {
+          return;
+        }
+
+        const canvasX = projectMapToCanvasX(oilRig.x, projection);
+        const canvasY = projectMapToCanvasY(oilRig.y, projection);
+        const stroke = oilRig.key === 'smallOilRig'
+          ? 'rgba(255, 184, 76, 0.92)'
+          : 'rgba(106, 214, 255, 0.92)';
+        const fill = oilRig.key === 'smallOilRig'
+          ? 'rgba(255, 184, 76, 0.28)'
+          : 'rgba(106, 214, 255, 0.24)';
+
+        context.save();
+        context.strokeStyle = stroke;
+        context.fillStyle = fill;
+        context.lineWidth = 1.4;
+        context.setLineDash([9, 6]);
+        context.beginPath();
+        context.ellipse(canvasX, canvasY, activationRadiusX, activationRadiusY, 0, 0, Math.PI * 2);
+        context.stroke();
+
+        context.setLineDash([3, 4]);
+        context.beginPath();
+        context.ellipse(canvasX, canvasY, intersectionRadiusX, intersectionRadiusY, 0, 0, Math.PI * 2);
+        context.stroke();
+
+        context.setLineDash([]);
+        context.beginPath();
+        context.arc(canvasX, canvasY, 5, 0, Math.PI * 2);
+        context.fill();
+
+        context.fillStyle = '#ffffff';
+        context.font = '12px Segoe UI, sans-serif';
+        context.textBaseline = 'bottom';
+        context.fillText(oilRig.key === 'smallOilRig' ? 'Small Rig' : 'Large Rig', canvasX + 8, canvasY - 8);
+        context.restore();
+      });
+
+      ch47Tracks.forEach((debugTrack) => {
+        if (typeof debugTrack?.currentX !== 'number' || typeof debugTrack?.currentY !== 'number') {
+          return;
+        }
+
+        if (typeof debugTrack?.previousX !== 'number' || typeof debugTrack?.previousY !== 'number') {
+          return;
+        }
+
+        const stroke = getCh47DebugStroke(debugTrack);
+        const clippedLine = getClippedInfiniteLinePoints(
+          debugTrack.previousX,
+          debugTrack.previousY,
+          debugTrack.currentX,
+          debugTrack.currentY,
+          projection
+        );
+
+        if (clippedLine) {
+          context.save();
+          context.strokeStyle = stroke;
+          context.lineWidth = 1.3;
+          context.setLineDash([10, 7]);
+          context.beginPath();
+          context.moveTo(projectMapToCanvasX(clippedLine[0].x, projection), projectMapToCanvasY(clippedLine[0].y, projection));
+          context.lineTo(projectMapToCanvasX(clippedLine[1].x, projection), projectMapToCanvasY(clippedLine[1].y, projection));
+          context.stroke();
+          context.restore();
+        }
+
+        const previousCanvasX = projectMapToCanvasX(debugTrack.previousX, projection);
+        const previousCanvasY = projectMapToCanvasY(debugTrack.previousY, projection);
+        const currentCanvasX = projectMapToCanvasX(debugTrack.currentX, projection);
+        const currentCanvasY = projectMapToCanvasY(debugTrack.currentY, projection);
+
+        context.save();
+        context.strokeStyle = stroke;
+        context.fillStyle = stroke;
+        context.lineWidth = 2;
+        context.setLineDash([]);
+        context.beginPath();
+        context.moveTo(previousCanvasX, previousCanvasY);
+        context.lineTo(currentCanvasX, currentCanvasY);
+        context.stroke();
+        context.fillRect(previousCanvasX - 2.5, previousCanvasY - 2.5, 5, 5);
+        context.beginPath();
+        context.arc(currentCanvasX, currentCanvasY, 6, 0, Math.PI * 2);
+        context.stroke();
+        context.restore();
+      });
+    }
+
     function updateMapDebugOverlay() {
       if (!mapDebugPanel) {
         return;
@@ -3408,6 +3610,15 @@
       lines.push(`Ocean margin: ${mapRenderContext.oceanMargin}`);
       lines.push(`World size: ${mapRenderContext.worldWidth} x ${mapRenderContext.worldHeight}`);
       lines.push(`Scale: x=${mapRenderContext.scaleX.toFixed(4)} y=${mapRenderContext.scaleY.toFixed(4)}`);
+
+      if (mapRenderContext.debug) {
+        const ch47Tracks = Array.isArray(mapRenderContext.debug.ch47Tracks) ? mapRenderContext.debug.ch47Tracks : [];
+        const intersectingTracks = ch47Tracks.filter((track) => track?.intersectsSmallOilRig || track?.intersectsLargeOilRig).length;
+        lines.push(`CH47 debug tracks: ${ch47Tracks.length}`);
+        lines.push(`Intersecting tracks: ${intersectingTracks}`);
+        lines.push(`Activation radius: ${(Number(mapRenderContext.debug.oilRigActivationDistance) || 0).toFixed(2)}`);
+        lines.push(`Intersection radius: ${(Number(mapRenderContext.debug.oilRigIntersectionRadius) || 0).toFixed(2)}`);
+      }
 
       if (mapRenderContext.bounds) {
         lines.push(
@@ -3518,6 +3729,7 @@
       const canvasCenterX = mapCanvas.width / 2;
       const canvasCenterY = mapCanvas.height / 2;
       const coordinateBounds = getMapCoordinateBounds(monuments, markers);
+      const debugPayload = payload?.debug && typeof payload.debug === 'object' ? payload.debug : null;
       mapRenderContext = {
         mapWidth,
         mapHeight,
@@ -3527,7 +3739,8 @@
         scaleX,
         scaleY,
         bounds: coordinateBounds,
-        markers
+        markers,
+        debug: debugPayload
       };
 
       const markerCounts = {
@@ -3553,6 +3766,8 @@
         context.arc(x, y, 2, 0, Math.PI * 2);
         context.fill();
       });
+
+      drawMapDebugGeometry(context, mapRenderContext);
 
       markers.forEach((marker) => {
         if (typeof marker?.x !== 'number' || typeof marker?.y !== 'number') {

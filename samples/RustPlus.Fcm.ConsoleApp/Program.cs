@@ -36,6 +36,8 @@ var rustPlusConnectTimeout = TimeSpan.FromSeconds(8);
 var rustPlusRequestTimeout = TimeSpan.FromSeconds(12);
 var rustPlusDisconnectTimeout = TimeSpan.FromSeconds(4);
 var listenerReconnectDelay = TimeSpan.FromSeconds(5);
+var listenerRecycleInterval = GetListenerRecycleInterval();
+var listenerRecyclePollInterval = TimeSpan.FromMinutes(5);
 var directRustPlusRetryDelay = TimeSpan.FromMilliseconds(350);
 var infoEventsRefreshInterval = TimeSpan.FromSeconds(30);
 var infoEventsMapMetadataRefreshInterval = TimeSpan.FromMinutes(10);
@@ -100,7 +102,12 @@ if (string.Equals(adminPassword, "uhs32syj", StringComparison.Ordinal))
 }
 
 var webTask = RunWebBridgeAsync(webPrefixes, httpCancellationTokenSource.Token);
+var listenerRecycleTask = RunListenerRecycleLoopAsync(httpCancellationTokenSource.Token);
 Console.WriteLine($"Web UI prefixes: {string.Join(", ", webPrefixes)}");
+if (listenerRecycleInterval > TimeSpan.Zero)
+{
+    Console.WriteLine($"Listener recycle interval: {listenerRecycleInterval}.");
+}
 
 var shutdownSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
@@ -117,6 +124,7 @@ foreach (var runtime in listenerRuntimes.Values)
 }
 httpCancellationTokenSource.Cancel();
 await webTask;
+await listenerRecycleTask;
 
 return;
 
@@ -188,6 +196,7 @@ void ConfigureListenerRuntime(ListenerRuntime runtime, Credentials credentials)
     runtime.ListenerReconnectCancellationTokenSource = new CancellationTokenSource();
     runtime.ListenerConnected = false;
     runtime.Credentials = credentials;
+    runtime.ListenerConfiguredAtUtc = DateTimeOffset.UtcNow;
 
     var listener = new RustPlusFcm(credentials);
     runtime.Listener = listener;
@@ -403,6 +412,66 @@ async Task EnsureListenerConnectedAsync(ListenerRuntime runtime, string reason, 
     finally
     {
         runtime.ListenerReconnectGate.Release();
+    }
+}
+
+async Task RunListenerRecycleLoopAsync(CancellationToken cancellationToken)
+{
+    if (listenerRecycleInterval <= TimeSpan.Zero)
+    {
+        return;
+    }
+
+    try
+    {
+        using var timer = new PeriodicTimer(listenerRecyclePollInterval);
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            await RecycleDueListenersAsync(cancellationToken);
+        }
+    }
+    catch (OperationCanceledException)
+    {
+    }
+}
+
+async Task RecycleDueListenersAsync(CancellationToken cancellationToken)
+{
+    var recycleBeforeUtc = DateTimeOffset.UtcNow - listenerRecycleInterval;
+
+    foreach (var runtime in listenerRuntimes.Values)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (runtime.Credentials is null
+            || runtime.Listener is null
+            || runtime.ListenerConfiguredAtUtc > recycleBeforeUtc)
+        {
+            continue;
+        }
+
+        var previousConfiguredAtUtc = runtime.ListenerConfiguredAtUtc;
+        Console.WriteLine($"[LISTENER RECYCLE:{runtime.UserId}] Rebuilding FCM listener after {DateTimeOffset.UtcNow - previousConfiguredAtUtc}.");
+        TrackDebugEvent(runtime, "listener-recycle", new { configuredAtUtc = previousConfiguredAtUtc });
+        ConfigureListenerRuntime(runtime, runtime.Credentials);
+        runtime.LastListenerRecycleAtUtc = DateTimeOffset.UtcNow;
+
+        try
+        {
+            await EnsureListenerConnectedAsync(runtime, "scheduled-recycle", runtime.ListenerReconnectCancellationTokenSource.Token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[LISTENER RECYCLE FAILED:{runtime.UserId}] {ex.Message}");
+            TrackDebugEvent(runtime, "listener-recycle-failed", new { message = ex.Message });
+        }
     }
 }
 
@@ -1362,7 +1431,7 @@ async Task HandleRequestAsync(HttpListenerContext context, CancellationToken can
 
     if (path.Equals("/api/map", StringComparison.OrdinalIgnoreCase))
     {
-        if (authenticatedUser is null || authenticatedUser.IsAdmin)
+        if (authenticatedUser is null)
         {
             await WriteJsonResponseAsync(context, 401, new { ok = false, message = "A signed-in user session is required." });
             return;
@@ -3659,6 +3728,24 @@ static string GetEnvironmentVariableOrDefault(string variableName, string defaul
     return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
 }
 
+static TimeSpan GetListenerRecycleInterval()
+{
+    const string variableName = "RUSTPLUS_LISTENER_RECYCLE_INTERVAL_HOURS";
+    var configuredValue = Environment.GetEnvironmentVariable(variableName);
+    if (string.IsNullOrWhiteSpace(configuredValue))
+    {
+        return TimeSpan.FromHours(24);
+    }
+
+    if (double.TryParse(configuredValue.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var hours) && hours > 0)
+    {
+        return TimeSpan.FromHours(hours);
+    }
+
+    Console.WriteLine($"WARNING: Ignoring invalid {variableName} value '{configuredValue}'. Falling back to 24 hours.");
+    return TimeSpan.FromHours(24);
+}
+
 static void LoadLocalEnvironmentFiles(params string[] directories)
 {
     foreach (var directory in directories.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -4592,7 +4679,7 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
 async Task HandleMapRequestAsync(HttpListenerContext context)
 {
     var authenticatedUser = TryGetAuthenticatedUser(context.Request);
-    if (authenticatedUser is null || authenticatedUser.IsAdmin)
+    if (authenticatedUser is null)
     {
         context.Response.StatusCode = 401;
         context.Response.Close();
@@ -4669,6 +4756,9 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
 
         var map = mapResponse.Data;
         var markers = markersResponse.Data;
+        var debugPayload = authenticatedUser.IsAdmin
+            ? BuildMapDebugPayload(map, markers, runtime.Ch47Tracks)
+            : null;
 
         var markerItems = new List<object>();
 
@@ -4720,7 +4810,8 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
                         y = monument.Y!.Value
                     })
             },
-            markers = markerItems
+            markers = markerItems,
+            debug = debugPayload
         };
 
         var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(payload);
@@ -4768,6 +4859,115 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
             }
         }
     }
+}
+
+static object BuildMapDebugPayload(
+    RustPlusApi.Data.ServerMap map,
+    RustPlusApi.Data.MapMarkers markers,
+    ConcurrentDictionary<uint, Ch47Track> ch47Tracks)
+{
+    const float oilRigActivationDistanceRatio = 0.20f;
+    const float oilRigIntersectionRadiusRatio = 0.03f;
+    const float minimumMovementDistanceRatio = 0.0025f;
+
+    var mapWidth = map.Width ?? 0u;
+    var mapHeight = map.Height ?? 0u;
+    var mapSize = Math.Max(mapWidth, mapHeight);
+    var effectiveMapSize = mapSize > 0 ? mapSize : 4500u;
+    var oilRigActivationDistance = effectiveMapSize * oilRigActivationDistanceRatio;
+    var oilRigIntersectionRadius = MathF.Max(90f, effectiveMapSize * oilRigIntersectionRadiusRatio);
+    var minimumMovementDistance = MathF.Max(20f, effectiveMapSize * minimumMovementDistanceRatio);
+
+    var monuments = map.Monuments ?? new List<RustPlusApi.Data.ServerMapMonument>();
+    var smallOilRigMonument = monuments.FirstOrDefault(IsSmallOilRigMonument);
+    var largeOilRigMonument = monuments.FirstOrDefault(IsLargeOilRigMonument);
+
+    var oilRigItems = new List<object>();
+    if (smallOilRigMonument?.X is not null && smallOilRigMonument.Y is not null)
+    {
+        oilRigItems.Add(new
+        {
+            key = "smallOilRig",
+            name = smallOilRigMonument.Name,
+            x = smallOilRigMonument.X.Value,
+            y = smallOilRigMonument.Y.Value
+        });
+    }
+
+    if (largeOilRigMonument?.X is not null && largeOilRigMonument.Y is not null)
+    {
+        oilRigItems.Add(new
+        {
+            key = "largeOilRig",
+            name = largeOilRigMonument.Name,
+            x = largeOilRigMonument.X.Value,
+            y = largeOilRigMonument.Y.Value
+        });
+    }
+
+    var ch47DebugItems = markers.Ch47Markers.Values
+        .Where(ch47 => ch47.X is not null && ch47.Y is not null)
+        .Select(ch47 =>
+        {
+            var previousTrack = ch47.Id is uint ch47Id && ch47Tracks.TryGetValue(ch47Id, out var existingTrack)
+                ? existingTrack
+                : null;
+
+            var currentX = ch47.X!.Value;
+            var currentY = ch47.Y!.Value;
+            var classification = ClassifyCh47Trajectory(
+                currentX,
+                currentY,
+                previousTrack,
+                mapSize,
+                smallOilRigMonument,
+                largeOilRigMonument);
+
+            var intersectsSmallOilRig = previousTrack is not null && DoesCh47FlightLineIntersectOilRig(
+                previousTrack.X,
+                previousTrack.Y,
+                currentX,
+                currentY,
+                smallOilRigMonument,
+                oilRigActivationDistance,
+                oilRigIntersectionRadius,
+                minimumMovementDistance);
+
+            var intersectsLargeOilRig = previousTrack is not null && DoesCh47FlightLineIntersectOilRig(
+                previousTrack.X,
+                previousTrack.Y,
+                currentX,
+                currentY,
+                largeOilRigMonument,
+                oilRigActivationDistance,
+                oilRigIntersectionRadius,
+                minimumMovementDistance);
+
+            return new
+            {
+                id = ch47.Id,
+                currentX,
+                currentY,
+                previousX = previousTrack?.X,
+                previousY = previousTrack?.Y,
+                previousObservedAtUtc = previousTrack?.ObservedAtUtc,
+                classification = classification.ToString(),
+                intersectsSmallOilRig,
+                intersectsLargeOilRig,
+                withinSmallOilRigActivationDistance = IsWithinOilRigActivationDistance(currentX, currentY, smallOilRigMonument, oilRigActivationDistance),
+                withinLargeOilRigActivationDistance = IsWithinOilRigActivationDistance(currentX, currentY, largeOilRigMonument, oilRigActivationDistance)
+            };
+        })
+        .ToArray();
+
+    return new
+    {
+        oilRigActivationDistance,
+        oilRigIntersectionRadius,
+        minimumMovementDistance,
+        oilRigs = oilRigItems,
+        ch47Tracks = ch47DebugItems
+    };
 }
 
 async Task HandleMonitorItemsRequestAsync(HttpListenerContext context)
@@ -5920,6 +6120,8 @@ file sealed class ListenerRuntime
     public Credentials? Credentials { get; set; }
     public RustPlusFcm? Listener { get; set; }
     public bool ListenerConnected { get; set; }
+    public DateTimeOffset ListenerConfiguredAtUtc { get; set; } = DateTimeOffset.MinValue;
+    public DateTimeOffset? LastListenerRecycleAtUtc { get; set; }
     public CancellationTokenSource ListenerReconnectCancellationTokenSource { get; set; } = new();
     public SemaphoreSlim ListenerReconnectGate { get; } = new(1, 1);
     public SemaphoreSlim DirectRequestGate { get; } = new(1, 1);
