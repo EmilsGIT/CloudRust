@@ -671,6 +671,38 @@
           return waitingForSwitchPairing || waitingForMonitorPairing || bugsTabActive;
         }
 
+        async function syncPendingPairingsFromPairingStatus() {
+          const waitingForSwitchPairing = !switchIdInput?.value?.trim();
+          const waitingForMonitorPairing = !monitorIdInput?.value?.trim();
+
+          if (!waitingForSwitchPairing && !waitingForMonitorPairing) {
+            return;
+          }
+
+          const response = await fetch('/api/pairing/status', { cache: 'no-store' });
+          if (!response.ok) {
+            throw new Error(`Pairing status returned ${response.status}`);
+          }
+
+          const payload = await response.json();
+          const latestSwitchEntityId = extractObserverEntityId(payload?.latestSmartSwitchPairing);
+          const latestMonitorEntityId = extractObserverEntityId(payload?.latestStorageMonitorPairing);
+
+          if (waitingForSwitchPairing && latestSwitchEntityId) {
+            syncSwitchPairingUi(latestSwitchEntityId, 'Smart switch paired. Ready to add.');
+            if (typeof window.__rustplusActivateFallbackTab === 'function') {
+              window.__rustplusActivateFallbackTab('switches');
+            }
+          }
+
+          if (waitingForMonitorPairing && latestMonitorEntityId) {
+            syncMonitorPairingUi(latestMonitorEntityId, 'Storage monitor paired. Ready to add.');
+            if (typeof window.__rustplusActivateFallbackTab === 'function') {
+              window.__rustplusActivateFallbackTab('monitors');
+            }
+          }
+        }
+
         async function pollDebugStatus() {
           if (!shouldPollDebugStatus()) {
             return;
@@ -704,6 +736,7 @@
                 syncMonitorPairingUi(latestMonitorEntityId, 'Storage monitor paired. Ready to add.');
               }
 
+              await syncPendingPairingsFromPairingStatus();
               hasSeededRecentEvents = true;
               return;
             }
@@ -737,6 +770,8 @@
                 }
               }
             }
+
+            await syncPendingPairingsFromPairingStatus();
           } catch (error) {
             pushLogEntry(`Debug observer poll failed: ${error?.message || 'unknown error'}`, 'warning');
           }
@@ -3178,11 +3213,11 @@
         loadBillingStatus();
       }
 
-      if (tabName === 'bugs' && authenticatedUser?.isAdmin) {
+      if (tabName === 'bugs' && canAccessBugsTab) {
         loadMapData();
       }
 
-      ensureMapAutoRefresh(tabName === 'bugs' && Boolean(authenticatedUser?.isAdmin));
+      ensureMapAutoRefresh(tabName === 'bugs' && canAccessBugsTab);
     }
 
     tabs.forEach((tab) => {
@@ -3423,6 +3458,171 @@
       return (normalized * projection.worldHeight) - projection.oceanMargin;
     }
 
+    function isCanvasPointInBounds(canvasX, canvasY, padding = 0) {
+      if (!mapCanvas) {
+        return false;
+      }
+
+      return canvasX >= padding
+        && canvasX <= (mapCanvas.width - padding)
+        && canvasY >= padding
+        && canvasY <= (mapCanvas.height - padding);
+    }
+
+    function clampCanvasPoint(canvasX, canvasY, padding = 0) {
+      if (!mapCanvas) {
+        return { x: canvasX, y: canvasY };
+      }
+
+      return {
+        x: Math.min(Math.max(canvasX, padding), mapCanvas.width - padding),
+        y: Math.min(Math.max(canvasY, padding), mapCanvas.height - padding)
+      };
+    }
+
+    function drawMapIconMarker(context, icon, canvasX, canvasY, options = {}) {
+      const width = Number(options.width) || 28;
+      const height = Number(options.height) || 28;
+      const padding = Number(options.padding) || Math.max(width, height) / 2;
+      const label = typeof options.label === 'string' ? options.label : '';
+      const stroke = typeof options.stroke === 'string' ? options.stroke : '#ffffff';
+      const inBounds = isCanvasPointInBounds(canvasX, canvasY, padding);
+      const placement = inBounds ? { x: canvasX, y: canvasY } : clampCanvasPoint(canvasX, canvasY, padding);
+
+      context.save();
+      if (icon) {
+        context.shadowColor = 'rgba(0, 0, 0, 0.45)';
+        context.shadowBlur = 8;
+        context.drawImage(icon, placement.x - (width / 2), placement.y - (height / 2), width, height);
+        context.shadowBlur = 0;
+      }
+
+      context.beginPath();
+      context.arc(placement.x, placement.y, 3.5, 0, Math.PI * 2);
+      context.fillStyle = '#ffffff';
+      context.fill();
+
+      context.beginPath();
+      context.arc(placement.x, placement.y, 1.5, 0, Math.PI * 2);
+      context.fillStyle = stroke;
+      context.fill();
+
+      if (!inBounds) {
+        context.lineWidth = 2;
+        context.strokeStyle = stroke;
+        context.strokeRect(placement.x - (width / 2), placement.y - (height / 2), width, height);
+      }
+
+      if (label) {
+        context.fillStyle = '#ffffff';
+        context.font = '12px Segoe UI, sans-serif';
+        context.textBaseline = 'bottom';
+        context.fillText(inBounds ? label : `${label} (off-map)`, placement.x + 8, placement.y - 8);
+      }
+
+      context.restore();
+      return {
+        inBounds,
+        actualX: canvasX,
+        actualY: canvasY,
+        drawX: placement.x,
+        drawY: placement.y
+      };
+    }
+
+    function getRustGridColumnLabel(index) {
+      let label = '';
+      let remaining = index;
+
+      do {
+        label = String.fromCharCode(65 + (remaining % 26)) + label;
+        remaining = Math.floor(remaining / 26) - 1;
+      } while (remaining >= 0);
+
+      return label;
+    }
+
+    function getRustGridDefinition(projection) {
+      const targetSquareSize = 146.25;
+      const columns = Math.max(1, Math.round((Number(projection?.mapWidth) || 0) / targetSquareSize));
+      const rows = Math.max(1, Math.round((Number(projection?.mapHeight) || 0) / targetSquareSize));
+      const cellWidth = (Number(projection?.mapWidth) || 0) / columns;
+      const cellHeight = (Number(projection?.mapHeight) || 0) / rows;
+
+      return {
+        columns,
+        rows,
+        cellWidth,
+        cellHeight
+      };
+    }
+
+    function drawMapGridOverlay(context, projection) {
+      if (!mapDebugToggle?.checked || !projection?.grid) {
+        return;
+      }
+
+      const terrainLeft = projectMapToCanvasX(0, projection);
+      const terrainRight = projectMapToCanvasX(projection.mapWidth, projection);
+      const terrainTop = projectMapToCanvasY(projection.mapHeight, projection);
+      const terrainBottom = projectMapToCanvasY(0, projection);
+      const { columns, rows, cellWidth, cellHeight } = projection.grid;
+
+      context.save();
+      context.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+      context.lineWidth = 1;
+      context.setLineDash([]);
+
+      for (let columnIndex = 0; columnIndex <= columns; columnIndex += 1) {
+        const mapX = Math.min(projection.mapWidth, columnIndex * cellWidth);
+        const canvasX = projectMapToCanvasX(mapX, projection);
+        context.beginPath();
+        context.moveTo(canvasX, terrainTop);
+        context.lineTo(canvasX, terrainBottom);
+        context.stroke();
+      }
+
+      for (let rowIndex = 0; rowIndex <= rows; rowIndex += 1) {
+        const mapY = Math.min(projection.mapHeight, rowIndex * cellHeight);
+        const canvasY = projectMapToCanvasY(mapY, projection);
+        context.beginPath();
+        context.moveTo(terrainLeft, canvasY);
+        context.lineTo(terrainRight, canvasY);
+        context.stroke();
+      }
+
+      context.strokeStyle = 'rgba(255, 96, 96, 0.92)';
+      context.lineWidth = 2;
+      context.strokeRect(terrainLeft, terrainTop, terrainRight - terrainLeft, terrainBottom - terrainTop);
+
+      context.fillStyle = 'rgba(8, 12, 18, 0.78)';
+      context.font = '11px Segoe UI, sans-serif';
+      context.textBaseline = 'top';
+      for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+        const mapX = (columnIndex + 0.5) * cellWidth;
+        const canvasX = projectMapToCanvasX(mapX, projection);
+        const label = getRustGridColumnLabel(columnIndex);
+        context.fillRect(canvasX - 10, terrainTop + 2, 20, 14);
+        context.fillStyle = '#ffffff';
+        context.textAlign = 'center';
+        context.fillText(label, canvasX, terrainTop + 4);
+        context.fillStyle = 'rgba(8, 12, 18, 0.78)';
+      }
+
+      context.textAlign = 'left';
+      for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+        const mapY = projection.mapHeight - ((rowIndex + 0.5) * cellHeight);
+        const canvasY = projectMapToCanvasY(mapY, projection);
+        const label = String(rowIndex);
+        context.fillRect(terrainLeft + 2, canvasY - 7, 20, 14);
+        context.fillStyle = '#ffffff';
+        context.fillText(label, terrainLeft + 6, canvasY - 6);
+        context.fillStyle = 'rgba(8, 12, 18, 0.78)';
+      }
+
+      context.restore();
+    }
+
     function getClippedInfiniteLinePoints(startX, startY, endX, endY, projection) {
       const minX = 0;
       const maxX = Number(projection?.mapWidth) || 0;
@@ -3509,6 +3709,7 @@
       const activationRadiusY = (Number(debug.oilRigActivationDistance) || 0) * projection.scaleY;
       const intersectionRadiusX = (Number(debug.oilRigIntersectionRadius) || 0) * projection.scaleX;
       const intersectionRadiusY = (Number(debug.oilRigIntersectionRadius) || 0) * projection.scaleY;
+      const oilRigIcons = projection?.oilRigIcons || {};
 
       oilRigs.forEach((oilRig) => {
         if (typeof oilRig?.x !== 'number' || typeof oilRig?.y !== 'number') {
@@ -3523,6 +3724,11 @@
         const fill = oilRig.key === 'smallOilRig'
           ? 'rgba(255, 184, 76, 0.28)'
           : 'rgba(106, 214, 255, 0.24)';
+        const icon = oilRig.key === 'smallOilRig'
+          ? oilRigIcons.small
+          : oilRigIcons.large;
+        const iconWidth = oilRig.key === 'smallOilRig' ? 26 : 30;
+        const iconHeight = oilRig.key === 'smallOilRig' ? 34 : 38;
 
         context.save();
         context.strokeStyle = stroke;
@@ -3537,17 +3743,15 @@
         context.beginPath();
         context.ellipse(canvasX, canvasY, intersectionRadiusX, intersectionRadiusY, 0, 0, Math.PI * 2);
         context.stroke();
-
-        context.setLineDash([]);
-        context.beginPath();
-        context.arc(canvasX, canvasY, 5, 0, Math.PI * 2);
-        context.fill();
-
-        context.fillStyle = '#ffffff';
-        context.font = '12px Segoe UI, sans-serif';
-        context.textBaseline = 'bottom';
-        context.fillText(oilRig.key === 'smallOilRig' ? 'Small Rig' : 'Large Rig', canvasX + 8, canvasY - 8);
         context.restore();
+
+        drawMapIconMarker(context, icon, canvasX, canvasY, {
+          width: iconWidth,
+          height: iconHeight,
+          padding: Math.max(iconWidth, iconHeight) / 2,
+          label: oilRig.key === 'smallOilRig' ? 'Small Rig' : 'Large Rig',
+          stroke
+        });
       });
 
       ch47Tracks.forEach((debugTrack) => {
@@ -3618,14 +3822,48 @@
       lines.push(`World size: ${mapRenderContext.worldWidth} x ${mapRenderContext.worldHeight}`);
       lines.push(`Scale: x=${mapRenderContext.scaleX.toFixed(4)} y=${mapRenderContext.scaleY.toFixed(4)}`);
 
+      if (mapRenderContext.grid) {
+        lines.push(`Grid: ${mapRenderContext.grid.columns} cols x ${mapRenderContext.grid.rows} rows`);
+        lines.push(`Grid cell: ${mapRenderContext.grid.cellWidth.toFixed(2)} x ${mapRenderContext.grid.cellHeight.toFixed(2)}`);
+        lines.push(
+          `Projected terrain rect: left=${projectMapToCanvasX(0, mapRenderContext).toFixed(1)}, right=${projectMapToCanvasX(mapRenderContext.mapWidth, mapRenderContext).toFixed(1)}, top=${projectMapToCanvasY(mapRenderContext.mapHeight, mapRenderContext).toFixed(1)}, bottom=${projectMapToCanvasY(0, mapRenderContext).toFixed(1)}`
+        );
+      }
+
       if (mapRenderContext.debug) {
         const ch47Tracks = Array.isArray(mapRenderContext.debug.ch47Tracks) ? mapRenderContext.debug.ch47Tracks : [];
+        const oilRigs = Array.isArray(mapRenderContext.debug.oilRigs) ? mapRenderContext.debug.oilRigs : [];
         const intersectingTracks = ch47Tracks.filter((track) => track?.intersectsSmallOilRig || track?.intersectsLargeOilRig).length;
         lines.push(`CH47 debug tracks: ${ch47Tracks.length}`);
         lines.push(`Intersecting tracks: ${intersectingTracks}`);
         lines.push(`Activation radius: ${(Number(mapRenderContext.debug.oilRigActivationDistance) || 0).toFixed(2)}`);
         lines.push(`Intersection radius: ${(Number(mapRenderContext.debug.oilRigIntersectionRadius) || 0).toFixed(2)}`);
+
+        oilRigs.forEach((oilRig) => {
+          if (typeof oilRig?.x !== 'number' || typeof oilRig?.y !== 'number') {
+            return;
+          }
+
+          const canvasX = projectMapToCanvasX(oilRig.x, mapRenderContext);
+          const canvasY = projectMapToCanvasY(oilRig.y, mapRenderContext);
+          const inBounds = isCanvasPointInBounds(canvasX, canvasY, 0);
+          lines.push(`${oilRig.key === 'smallOilRig' ? 'Small Rig' : 'Large Rig'}: map=(${oilRig.x.toFixed(2)}, ${oilRig.y.toFixed(2)}), canvas=(${canvasX.toFixed(1)}, ${canvasY.toFixed(1)}), inBounds=${inBounds}`);
+        });
       }
+
+      const movingMarkers = (Array.isArray(mapRenderContext.markers) ? mapRenderContext.markers : [])
+        .filter((marker) => marker?.type === 'cargoShip' || marker?.type === 'ch47');
+      lines.push(`Moving markers on map: ${movingMarkers.length}`);
+      movingMarkers.forEach((marker) => {
+        if (typeof marker?.x !== 'number' || typeof marker?.y !== 'number') {
+          return;
+        }
+
+        const canvasX = projectMapToCanvasX(marker.x, mapRenderContext);
+        const canvasY = projectMapToCanvasY(marker.y, mapRenderContext);
+        const inBounds = isCanvasPointInBounds(canvasX, canvasY, 0);
+        lines.push(`${marker.type === 'cargoShip' ? 'Cargo' : 'CH47'} #${marker.id}: map=(${marker.x.toFixed(2)}, ${marker.y.toFixed(2)}), canvas=(${canvasX.toFixed(1)}, ${canvasY.toFixed(1)}), inBounds=${inBounds}`);
+      });
 
       if (mapRenderContext.bounds) {
         lines.push(
@@ -3707,6 +3945,12 @@
       const mapImageDataUrl = typeof payload?.map?.imageDataUrl === 'string' ? payload.map.imageDataUrl : '';
       const monuments = Array.isArray(payload?.map?.monuments) ? payload.map.monuments : [];
       const markers = Array.isArray(payload?.markers) ? payload.markers : [];
+      const [smallOilRigIcon, largeOilRigIcon, cargoShipIcon, ch47Icon] = await Promise.all([
+        getOrLoadMapImage('/Icons/Smallrig.png').catch(() => null),
+        getOrLoadMapImage('/Icons/Largerig.png').catch(() => null),
+        getOrLoadMapImage('/Icons/cargo.png').catch(() => null),
+        getOrLoadMapImage('/Icons/chinook47.png').catch(() => null)
+      ]);
 
       if (mapImageDataUrl) {
         try {
@@ -3737,6 +3981,7 @@
       const canvasCenterY = mapCanvas.height / 2;
       const coordinateBounds = getMapCoordinateBounds(monuments, markers);
       const debugPayload = payload?.debug && typeof payload.debug === 'object' ? payload.debug : null;
+      const rustGrid = getRustGridDefinition({ mapWidth, mapHeight });
       mapRenderContext = {
         mapWidth,
         mapHeight,
@@ -3745,9 +3990,18 @@
         worldHeight: safeWorldHeight,
         scaleX,
         scaleY,
+        grid: rustGrid,
         bounds: coordinateBounds,
         markers,
-        debug: debugPayload
+        debug: debugPayload,
+        oilRigIcons: {
+          small: smallOilRigIcon,
+          large: largeOilRigIcon
+        },
+        markerIcons: {
+          cargoShip: cargoShipIcon,
+          ch47: ch47Icon
+        }
       };
 
       const markerCounts = {
@@ -3774,6 +4028,8 @@
         context.fill();
       });
 
+      drawMapGridOverlay(context, mapRenderContext);
+
       drawMapDebugGeometry(context, mapRenderContext);
 
       markers.forEach((marker) => {
@@ -3786,13 +4042,28 @@
         const markerType = marker.type;
         let renderX = x;
         let renderY = y;
+        let markerIcon = null;
+        let markerIconWidth = 0;
+        let markerIconHeight = 0;
+        let markerLabel = '';
+        let markerStroke = '#ffffff';
 
         if (markerType === 'cargoShip') {
           context.fillStyle = '#39ff78';
           markerCounts.cargoShip += 1;
+          markerIcon = mapRenderContext.markerIcons?.cargoShip || null;
+          markerIconWidth = 36;
+          markerIconHeight = 24;
+          markerLabel = 'Cargo';
+          markerStroke = '#39ff78';
         } else if (markerType === 'ch47') {
           context.fillStyle = '#f06f3c';
           markerCounts.ch47 += 1;
+          markerIcon = mapRenderContext.markerIcons?.ch47 || null;
+          markerIconWidth = 38;
+          markerIconHeight = 28;
+          markerLabel = 'CH47';
+          markerStroke = '#f06f3c';
         } else if (markerType === 'patrolHelicopter') {
           context.fillStyle = '#ffb08f';
           markerCounts.patrolHelicopter += 1;
@@ -3806,6 +4077,17 @@
           renderY = canvasCenterY + ((y - canvasCenterY) * vendingOverlayScale) + vendingOverlayOffsetY;
         } else {
           context.fillStyle = '#cfcfcf';
+        }
+
+        if (markerIcon) {
+          drawMapIconMarker(context, markerIcon, renderX, renderY, {
+            width: markerIconWidth,
+            height: markerIconHeight,
+            padding: Math.max(markerIconWidth, markerIconHeight) / 2,
+            label: markerLabel,
+            stroke: markerStroke
+          });
+          return;
         }
 
         context.beginPath();
