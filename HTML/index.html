@@ -5777,7 +5777,12 @@
         return;
       }
 
-      syncSwitchPairingUi(String(entityId), 'Smart switch paired. Ready to add.');
+      if (switchIdInput) {
+        switchIdInput.value = String(entityId);
+      }
+      if (fcmStatus) {
+        fcmStatus.textContent = 'Smart switch paired. Ready to add.';
+      }
       window.__rustplusLiveObserver?.recordEvent('smart-switch-pairing', {
         entityId,
         detail: 'Main pairing handler updated the switch form.',
@@ -5792,7 +5797,12 @@
         return;
       }
 
-      syncMonitorPairingUi(String(entityId), 'Storage monitor paired. Ready to add.');
+      if (monitorIdInput) {
+        monitorIdInput.value = String(entityId);
+      }
+      if (monitorFcmStatus) {
+        monitorFcmStatus.textContent = 'Storage monitor paired. Ready to add.';
+      }
       window.__rustplusLiveObserver?.recordEvent('storage-monitor-pairing', {
         entityId,
         detail: 'Main pairing handler updated the monitor form.',
