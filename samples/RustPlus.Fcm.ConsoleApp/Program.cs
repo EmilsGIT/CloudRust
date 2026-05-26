@@ -151,6 +151,8 @@ ListenerRuntime GetListenerRuntime(string userId)
         Directory.CreateDirectory(directoryPath);
 
         var serverPairingPath = Path.Combine(directoryPath, "server-pairing.cache.json");
+        var smartSwitchPairingPath = Path.Combine(directoryPath, "smart-switch-pairing.cache.json");
+        var storageMonitorPairingPath = Path.Combine(directoryPath, "storage-monitor-pairing.cache.json");
         var infoEventsPath = Path.Combine(directoryPath, "info-events.cache.json");
         var steamLoginConfigPath = Path.Combine(directoryPath, "steam-login.config.json");
 
@@ -159,9 +161,13 @@ ListenerRuntime GetListenerRuntime(string userId)
             UserId = id,
             DirectoryPath = directoryPath,
             ServerPairingCachePath = serverPairingPath,
+            SmartSwitchPairingCachePath = smartSwitchPairingPath,
+            StorageMonitorPairingCachePath = storageMonitorPairingPath,
             InfoEventsCachePath = infoEventsPath,
             SteamLoginConfigPath = steamLoginConfigPath,
             LatestServerPairing = LoadServerPairingCache(serverPairingPath),
+            LatestSmartSwitchPairing = LoadEntityPairingCache(smartSwitchPairingPath),
+            LatestStorageMonitorPairing = LoadEntityPairingCache(storageMonitorPairingPath),
             InfoEventsCache = LoadInfoEventsCache(infoEventsPath)
         };
     }, new { userDataDirectoryPath });
@@ -314,6 +320,7 @@ void ConfigureListenerRuntime(ListenerRuntime runtime, Credentials credentials)
                 PlayerId = pairing.PlayerId,
                 ServerId = pairing.ServerId
             };
+            SaveEntityPairingCache(runtime.SmartSwitchPairingCachePath, runtime.LatestSmartSwitchPairing);
 
             _ = BroadcastEventAsync(runtime, "smart-switch-pairing", new
             {
@@ -337,6 +344,7 @@ void ConfigureListenerRuntime(ListenerRuntime runtime, Credentials credentials)
                 PlayerId = pairing.PlayerId,
                 ServerId = pairing.ServerId
             };
+            SaveEntityPairingCache(runtime.StorageMonitorPairingCachePath, runtime.LatestStorageMonitorPairing);
         }
     };
 
@@ -354,6 +362,7 @@ void ConfigureListenerRuntime(ListenerRuntime runtime, Credentials credentials)
             PlayerId = pairing.PlayerId,
             ServerId = pairing.ServerId
         };
+        SaveEntityPairingCache(runtime.SmartSwitchPairingCachePath, runtime.LatestSmartSwitchPairing);
         _ = BroadcastEventAsync(runtime, "smart-switch-pairing", new
         {
             type = "smart-switch-pairing",
@@ -377,6 +386,7 @@ void ConfigureListenerRuntime(ListenerRuntime runtime, Credentials credentials)
             PlayerId = pairing.PlayerId,
             ServerId = pairing.ServerId
         };
+        SaveEntityPairingCache(runtime.StorageMonitorPairingCachePath, runtime.LatestStorageMonitorPairing);
         _ = BroadcastEventAsync(runtime, "storage-monitor-pairing", new
         {
             type = "storage-monitor-pairing",
@@ -5831,6 +5841,44 @@ static void SaveServerPairingCache(string cachePath, Notification<ServerEvent?> 
     }
 }
 
+static LatestEntityPairingState? LoadEntityPairingCache(string cachePath)
+{
+    try
+    {
+        if (!File.Exists(cachePath))
+        {
+            return null;
+        }
+
+        var json = File.ReadAllText(cachePath);
+        return JsonSerializer.Deserialize<LatestEntityPairingState>(json, JsonUtilities.JsonOptions);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ENTITY PAIRING CACHE LOAD FAILED] path={cachePath} error={ex.Message}");
+        return null;
+    }
+}
+
+static void SaveEntityPairingCache(string cachePath, LatestEntityPairingState pairing)
+{
+    try
+    {
+        var directoryPath = Path.GetDirectoryName(cachePath);
+        if (!string.IsNullOrWhiteSpace(directoryPath))
+        {
+            Directory.CreateDirectory(directoryPath);
+        }
+
+        var json = JsonSerializer.Serialize(pairing, JsonUtilities.JsonOptions);
+        File.WriteAllText(cachePath, json);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ENTITY PAIRING CACHE SAVE FAILED] path={cachePath} error={ex.Message}");
+    }
+}
+
 static InfoEventsCache LoadInfoEventsCache(string cachePath)
 {
     try
@@ -6250,6 +6298,8 @@ file sealed class ListenerRuntime
     public string UserId { get; set; } = string.Empty;
     public string DirectoryPath { get; set; } = string.Empty;
     public string ServerPairingCachePath { get; set; } = string.Empty;
+    public string SmartSwitchPairingCachePath { get; set; } = string.Empty;
+    public string StorageMonitorPairingCachePath { get; set; } = string.Empty;
     public string InfoEventsCachePath { get; set; } = string.Empty;
     public string SteamLoginConfigPath { get; set; } = string.Empty;
     public Credentials? Credentials { get; set; }

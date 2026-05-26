@@ -1646,7 +1646,20 @@
     }
 
     function renderPairingStatus() {
-      if (!pairingStatusText || !pairingSteamStateCard || !pairingServerStateCard || !pairingServerStatus || !pairingServerHelpText || !pairingHelperStatus || !pairingSteamLoginButton || !pairingSteamViewerButton || !pairingSteamLogoutButton) {
+      const missingElements = [
+        ['pairingStatusText', pairingStatusText],
+        ['pairingSteamStateCard', pairingSteamStateCard],
+        ['pairingServerStateCard', pairingServerStateCard],
+        ['pairingServerStatus', pairingServerStatus],
+        ['pairingServerHelpText', pairingServerHelpText],
+        ['pairingHelperStatus', pairingHelperStatus],
+        ['pairingSteamLoginButton', pairingSteamLoginButton],
+        ['pairingSteamViewerButton', pairingSteamViewerButton],
+        ['pairingSteamLogoutButton', pairingSteamLogoutButton],
+      ].filter(([, el]) => !el).map(([name]) => name);
+
+      if (missingElements.length > 0) {
+        console.error('[renderPairingStatus] Missing DOM elements:', missingElements.join(', '));
         return;
       }
 
