@@ -3670,6 +3670,44 @@
       return promise;
     }
 
+    function getRustGridColumnLabel(index) {
+      let label = '';
+      let remaining = index;
+
+      do {
+        label = String.fromCharCode(65 + (remaining % 26)) + label;
+        remaining = Math.floor(remaining / 26) - 1;
+      } while (remaining >= 0);
+
+      return label;
+    }
+
+    function getCorrectedRustMapSize(mapSize) {
+      const gridDiameter = 146.25;
+      const remainder = mapSize % gridDiameter;
+      const offset = gridDiameter - remainder;
+      return (remainder < 120) ? mapSize - remainder : mapSize + offset;
+    }
+
+    function getRustGridDefinition(projection) {
+      const gridDiameter = 146.25;
+      const mapWidth = Number(projection?.mapWidth) || 0;
+      const mapHeight = Number(projection?.mapHeight) || 0;
+      const correctedWidth = getCorrectedRustMapSize(mapWidth);
+      const correctedHeight = getCorrectedRustMapSize(mapHeight);
+      const columns = Math.max(1, Math.floor(correctedWidth / gridDiameter));
+      const rows = Math.max(1, Math.floor(correctedHeight / gridDiameter));
+      const cellWidth = mapWidth / columns;
+      const cellHeight = mapHeight / rows;
+
+      return {
+        columns,
+        rows,
+        cellWidth,
+        cellHeight
+      };
+    }
+
     function drawMainMapGrid(context, projection) {
       if (!projection?.grid) {
         return;
