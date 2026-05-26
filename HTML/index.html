@@ -56,6 +56,7 @@
       <nav class="tab-list" aria-label="Main navigation">        
         <button id="pairingTabButton" class="tab active" type="button" data-tab="pairing">Pairing</button>
         <button class="tab" type="button" data-tab="info">Server Info</button>
+        <button class="tab" type="button" data-tab="map">Map</button>
         <button class="tab" type="button" data-tab="my-system">My System</button>
         <button class="tab" type="button" data-tab="switches">Switches</button>
         <button class="tab" type="button" data-tab="monitors">Storage Monitors</button>
@@ -104,7 +105,7 @@
               <li class="info-row"><span class="event-label"><img src="../Icons/cargo.png" alt="Cargoship Left" class="event-icon" />Cargoship Event</span><span id="infoCargoShip">Loading...</span></li>
               <li class="info-row"><span class="event-label"><img src="../Icons/chinook47.png" alt="Chinook 47 Locked Crate" class="event-icon" />Chinook 47 Locked Crate Event</span><span id="infoChinook47">Loading...</span></li>
               <li class="info-row"><span class="event-label"><img src="../Icons/PatrolHelicopter.png" alt="Patrol Helicopter" class="event-icon" />Patrol Helicopter Event</span><span id="infoPatrolHelicopter">Loading...</span></li>
-              <li class="info-row"><span class="event-label"><img src="../Icons/vendor.png" alt="Travelling Vendor" class="event-icon" />Travelling Vendor</span><span id="infoTravelingVendor">Loading...</span></li>
+              <li class="info-row"><span class="event-label"><img src="../Icons/traveling-vendor.png" alt="Travelling Vendor" class="event-icon" />Travelling Vendor</span><span id="infoTravelingVendor">Loading...</span></li>
               <li class="info-row"><span class="event-label"><img src="../Icons/deepSea.png" alt="The Deep Sea" class="event-icon" />The Deep Sea</span><span id="infoDeepSea">Loading...</span></li>
             </ul>
             <p class="info-footnote" id="infoFootnote"></p>
@@ -116,6 +117,23 @@
             <p class="info-footnote" id="teamFootnote"></p>
           </div>
         </section>
+      </section>
+
+      <section class="tab-panel" data-panel="map">
+        <div class="map-tab-layout">
+          <div class="info-card map-tab-card">
+            <div class="map-tab-header">
+              <div>
+                <h3 class="team-title">Map</h3>
+                <p id="mainMapStatus" class="map-status">Waiting to load map.</p>
+              </div>
+              <button id="mainMapRefreshButton" class="ok-button map-tab-refresh-button" type="button">Refresh</button>
+            </div>
+            <canvas id="mainMapCanvas" class="map-canvas map-tab-canvas" width="900" height="900"></canvas>
+            <ul id="mainMapLegend" class="info-list map-legend"></ul>
+            <p id="mainMapFootnote" class="info-footnote"></p>
+          </div>
+        </div>
       </section>
 
       <section class="tab-panel" data-panel="switches">
@@ -3217,7 +3235,12 @@
         loadMapData();
       }
 
+      if (tabName === 'map') {
+        loadMainMapData();
+      }
+
       ensureMapAutoRefresh(tabName === 'bugs' && canAccessBugsTab);
+      ensureMainMapAutoRefresh(tabName === 'map');
     }
 
     tabs.forEach((tab) => {
@@ -4166,6 +4189,367 @@
 
       return mapRequestInFlight;
     }
+
+    // ---- Dedicated Map tab (mainMap*) ----
+
+    const mainMapCanvas = document.getElementById('mainMapCanvas');
+    const mainMapStatus = document.getElementById('mainMapStatus');
+    const mainMapLegend = document.getElementById('mainMapLegend');
+    const mainMapFootnote = document.getElementById('mainMapFootnote');
+    const mainMapRefreshButton = document.getElementById('mainMapRefreshButton');
+    const mainMapImagePromiseCache = new Map();
+    let mainMapAutoRefreshTimer = null;
+    let mainMapLastRequestedAtMs = 0;
+    let mainMapRequestInFlight = null;
+    let mainMapLatestPayload = null;
+    let mainMapRenderContext = null;
+
+    function getOrLoadMainMapImage(imageDataUrl) {
+      if (!imageDataUrl) {
+        return Promise.resolve(null);
+      }
+
+      const cached = mainMapImagePromiseCache.get(imageDataUrl);
+      if (cached) {
+        return cached;
+      }
+
+      const promise = new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => {
+          mainMapImagePromiseCache.delete(imageDataUrl);
+          reject(new Error('Failed to load map image.'));
+        };
+        img.src = imageDataUrl;
+      });
+
+      mainMapImagePromiseCache.set(imageDataUrl, promise);
+      return promise;
+    }
+
+    function drawMainMapGrid(context, projection) {
+      if (!projection?.grid) {
+        return;
+      }
+
+      const terrainLeft = projectMapToCanvasX(0, projection);
+      const terrainRight = projectMapToCanvasX(projection.mapWidth, projection);
+      const terrainTop = projectMapToCanvasY(projection.mapHeight, projection);
+      const terrainBottom = projectMapToCanvasY(0, projection);
+      const { columns, rows, cellWidth, cellHeight } = projection.grid;
+
+      context.save();
+      context.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+      context.lineWidth = 1;
+      context.setLineDash([]);
+
+      for (let col = 0; col <= columns; col += 1) {
+        const mapX = Math.min(projection.mapWidth, col * cellWidth);
+        const canvasX = projectMapToCanvasX(mapX, projection);
+        context.beginPath();
+        context.moveTo(canvasX, terrainTop);
+        context.lineTo(canvasX, terrainBottom);
+        context.stroke();
+      }
+
+      for (let row = 0; row <= rows; row += 1) {
+        const mapY = Math.min(projection.mapHeight, row * cellHeight);
+        const canvasY = projectMapToCanvasY(mapY, projection);
+        context.beginPath();
+        context.moveTo(terrainLeft, canvasY);
+        context.lineTo(terrainRight, canvasY);
+        context.stroke();
+      }
+
+      context.strokeStyle = 'rgba(255, 96, 96, 0.80)';
+      context.lineWidth = 2;
+      context.strokeRect(terrainLeft, terrainTop, terrainRight - terrainLeft, terrainBottom - terrainTop);
+
+      context.font = '11px Segoe UI, sans-serif';
+      context.textBaseline = 'top';
+
+      for (let col = 0; col < columns; col += 1) {
+        const mapX = (col + 0.5) * cellWidth;
+        const canvasX = projectMapToCanvasX(mapX, projection);
+        const label = getRustGridColumnLabel(col);
+        context.fillStyle = 'rgba(8, 12, 18, 0.78)';
+        context.fillRect(canvasX - 10, terrainTop + 2, 20, 14);
+        context.fillStyle = '#ffffff';
+        context.textAlign = 'center';
+        context.fillText(label, canvasX, terrainTop + 4);
+      }
+
+      context.textAlign = 'left';
+      for (let row = 0; row < rows; row += 1) {
+        const mapY = projection.mapHeight - ((row + 0.5) * cellHeight);
+        const canvasY = projectMapToCanvasY(mapY, projection);
+        const label = String(row);
+        context.fillStyle = 'rgba(8, 12, 18, 0.78)';
+        context.fillRect(terrainLeft + 2, canvasY - 7, 20, 14);
+        context.fillStyle = '#ffffff';
+        context.fillText(label, terrainLeft + 6, canvasY - 6);
+      }
+
+      context.restore();
+    }
+
+    function updateMainMapLegend(counts) {
+      if (!mainMapLegend) {
+        return;
+      }
+
+      mainMapLegend.innerHTML = '';
+      const entries = [
+        { label: 'Monuments', count: counts.monument, color: '#e6e6e6' },
+        { label: 'Vending Machines', count: counts.vendingMachine, color: '#45d7ff' },
+        { label: 'Cargo Ship', count: counts.cargoShip, color: '#39ff78' },
+        { label: 'Chinook 47', count: counts.ch47, color: '#f06f3c' },
+        { label: 'Patrol Helicopter', count: counts.patrolHelicopter, color: '#ffb08f' },
+        { label: 'Travelling Vendor', count: counts.travelingVendor, color: '#b9ffd0' }
+      ];
+
+      entries.forEach(({ label, count, color }) => {
+        if (count === 0) {
+          return;
+        }
+
+        const li = document.createElement('li');
+        li.className = 'info-row';
+        li.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:6px;flex-shrink:0;"></span><span>${label}: ${count}</span>`;
+        mainMapLegend.appendChild(li);
+      });
+    }
+
+    async function renderMainMap(payload) {
+      if (!mainMapCanvas) {
+        return;
+      }
+
+      const context = mainMapCanvas.getContext('2d');
+      if (!context) {
+        return;
+      }
+
+      const mapWidth = Number(payload?.map?.width) || 4500;
+      const mapHeight = Number(payload?.map?.height) || 4500;
+      const oceanMargin = Number(payload?.map?.oceanMargin) || 0;
+      const mapImageDataUrl = typeof payload?.map?.imageDataUrl === 'string' ? payload.map.imageDataUrl : '';
+      const monuments = Array.isArray(payload?.map?.monuments) ? payload.map.monuments : [];
+      const markers = Array.isArray(payload?.markers) ? payload.markers : [];
+
+      const [smallRigIcon, largeRigIcon, cargoIcon, ch47Icon, patrolIcon, vendorIcon] = await Promise.all([
+        getOrLoadMainMapImage('/Icons/Smallrig.png').catch(() => null),
+        getOrLoadMainMapImage('/Icons/Largerig.png').catch(() => null),
+        getOrLoadMainMapImage('/Icons/cargo.png').catch(() => null),
+        getOrLoadMainMapImage('/Icons/chinook47.png').catch(() => null),
+        getOrLoadMainMapImage('/Icons/PatrolHelicopter.png').catch(() => null),
+        getOrLoadMainMapImage('/Icons/traveling-vendor.png').catch(() => null)
+      ]);
+
+      if (mapImageDataUrl) {
+        try {
+          const image = await getOrLoadMainMapImage(mapImageDataUrl);
+          if (image) {
+            context.drawImage(image, 0, 0, mainMapCanvas.width, mainMapCanvas.height);
+          } else {
+            context.fillStyle = '#2f2f2f';
+            context.fillRect(0, 0, mainMapCanvas.width, mainMapCanvas.height);
+          }
+        } catch {
+          context.fillStyle = '#2f2f2f';
+          context.fillRect(0, 0, mainMapCanvas.width, mainMapCanvas.height);
+        }
+      } else {
+        context.fillStyle = '#2f2f2f';
+        context.fillRect(0, 0, mainMapCanvas.width, mainMapCanvas.height);
+      }
+
+      const worldWidth = mapWidth + (oceanMargin * 2);
+      const worldHeight = mapHeight + (oceanMargin * 2);
+      const safeWorldWidth = worldWidth > 0 ? worldWidth : mapWidth;
+      const safeWorldHeight = worldHeight > 0 ? worldHeight : mapHeight;
+      const rustGrid = getRustGridDefinition({ mapWidth, mapHeight });
+
+      mainMapRenderContext = {
+        mapWidth,
+        mapHeight,
+        oceanMargin,
+        worldWidth: safeWorldWidth,
+        worldHeight: safeWorldHeight,
+        scaleX: mainMapCanvas.width / safeWorldWidth,
+        scaleY: mainMapCanvas.height / safeWorldHeight,
+        grid: rustGrid
+      };
+
+      const counts = {
+        monument: 0,
+        vendingMachine: 0,
+        cargoShip: 0,
+        ch47: 0,
+        patrolHelicopter: 0,
+        travelingVendor: 0
+      };
+
+      // Draw monuments
+      monuments.forEach((monument) => {
+        if (typeof monument?.x !== 'number' || typeof monument?.y !== 'number') {
+          return;
+        }
+
+        const x = projectMapToCanvasX(monument.x, mainMapRenderContext);
+        const y = projectMapToCanvasY(monument.y, mainMapRenderContext);
+        counts.monument += 1;
+        context.fillStyle = '#e6e6e6';
+        context.beginPath();
+        context.arc(x, y, 2, 0, Math.PI * 2);
+        context.fill();
+      });
+
+      // Draw grid (always visible)
+      drawMainMapGrid(context, mainMapRenderContext);
+
+      // Draw markers
+      markers.forEach((marker) => {
+        if (typeof marker?.x !== 'number' || typeof marker?.y !== 'number') {
+          return;
+        }
+
+        const x = projectMapToCanvasX(marker.x, mainMapRenderContext);
+        const y = projectMapToCanvasY(marker.y, mainMapRenderContext);
+        const markerType = marker.type;
+
+        if (markerType === 'cargoShip') {
+          counts.cargoShip += 1;
+          if (cargoIcon) {
+            drawMapIconMarker(context, cargoIcon, x, y, { width: 36, height: 24, label: 'Cargo', stroke: '#39ff78' });
+          } else {
+            context.fillStyle = '#39ff78';
+            context.beginPath();
+            context.arc(x, y, 6, 0, Math.PI * 2);
+            context.fill();
+          }
+        } else if (markerType === 'ch47') {
+          counts.ch47 += 1;
+          if (ch47Icon) {
+            drawMapIconMarker(context, ch47Icon, x, y, { width: 38, height: 28, label: 'CH47', stroke: '#f06f3c' });
+          } else {
+            context.fillStyle = '#f06f3c';
+            context.beginPath();
+            context.arc(x, y, 6, 0, Math.PI * 2);
+            context.fill();
+          }
+        } else if (markerType === 'patrolHelicopter') {
+          counts.patrolHelicopter += 1;
+          if (patrolIcon) {
+            drawMapIconMarker(context, patrolIcon, x, y, { width: 34, height: 24, label: 'Heli', stroke: '#ffb08f' });
+          } else {
+            context.fillStyle = '#ffb08f';
+            context.beginPath();
+            context.arc(x, y, 6, 0, Math.PI * 2);
+            context.fill();
+          }
+        } else if (markerType === 'travelingVendor') {
+          counts.travelingVendor += 1;
+          if (vendorIcon) {
+            drawMapIconMarker(context, vendorIcon, x, y, { width: 28, height: 28, label: 'Vendor', stroke: '#b9ffd0' });
+          } else {
+            context.fillStyle = '#b9ffd0';
+            context.beginPath();
+            context.arc(x, y, 5, 0, Math.PI * 2);
+            context.fill();
+          }
+        } else if (markerType === 'vendingMachine') {
+          counts.vendingMachine += 1;
+          context.fillStyle = '#45d7ff';
+          context.beginPath();
+          context.arc(x, y, 3, 0, Math.PI * 2);
+          context.fill();
+        }
+      });
+
+      updateMainMapLegend(counts);
+    }
+
+    async function loadMainMapData(options = {}) {
+      if (!mainMapStatus) {
+        return;
+      }
+
+      const force = Boolean(options.force);
+      const now = Date.now();
+      const elapsedSinceLastRequest = now - mainMapLastRequestedAtMs;
+
+      if (!force && mainMapLastRequestedAtMs > 0 && elapsedSinceLastRequest < mapRefreshIntervalMs) {
+        const secondsRemaining = Math.ceil((mapRefreshIntervalMs - elapsedSinceLastRequest) / 1000);
+        mainMapStatus.textContent = `Map refresh limited to once per minute. Next update in ${secondsRemaining}s.`;
+        return;
+      }
+
+      if (mainMapRequestInFlight) {
+        return mainMapRequestInFlight;
+      }
+
+      mainMapStatus.textContent = 'Loading map...';
+
+      mainMapRequestInFlight = (async () => {
+        mainMapLastRequestedAtMs = Date.now();
+
+        try {
+          const response = await fetch('/api/map');
+          const payload = await response.json();
+
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || 'Failed to load map.');
+          }
+
+          mainMapLatestPayload = payload;
+          await renderMainMap(payload);
+          mainMapStatus.textContent = 'Map loaded.';
+
+          const refreshedAt = payload.refreshedAtUtc ? new Date(payload.refreshedAtUtc).toLocaleString() : null;
+          if (mainMapFootnote) {
+            mainMapFootnote.textContent = refreshedAt ? `Map updated: ${refreshedAt}` : '';
+          }
+        } catch (error) {
+          mainMapStatus.textContent = `Map fetch failed: ${error.message}`;
+          if (mainMapFootnote) {
+            mainMapFootnote.textContent = '';
+          }
+
+          if (mainMapLatestPayload) {
+            await renderMainMap(mainMapLatestPayload);
+          }
+        } finally {
+          mainMapRequestInFlight = null;
+        }
+      })();
+
+      return mainMapRequestInFlight;
+    }
+
+    function ensureMainMapAutoRefresh(isActive) {
+      if (mainMapAutoRefreshTimer) {
+        clearInterval(mainMapAutoRefreshTimer);
+        mainMapAutoRefreshTimer = null;
+      }
+
+      if (!isActive) {
+        return;
+      }
+
+      mainMapAutoRefreshTimer = setInterval(() => {
+        loadMainMapData();
+      }, mapRefreshIntervalMs);
+    }
+
+    if (mainMapRefreshButton) {
+      mainMapRefreshButton.addEventListener('click', () => {
+        loadMainMapData({ force: true });
+      });
+    }
+
+    // ---- End dedicated Map tab ----
 
     function bindSmallOilRigRealtime(item) {
       if (smallOilRigTicker) {

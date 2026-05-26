@@ -34,6 +34,7 @@ var httpCancellationTokenSource = new CancellationTokenSource();
 var rustPlusReachabilityTimeout = TimeSpan.FromSeconds(4);
 var rustPlusConnectTimeout = TimeSpan.FromSeconds(8);
 var rustPlusRequestTimeout = TimeSpan.FromSeconds(12);
+var rustPlusMapRequestTimeout = TimeSpan.FromSeconds(30);
 var rustPlusDisconnectTimeout = TimeSpan.FromSeconds(4);
 var listenerReconnectDelay = TimeSpan.FromSeconds(5);
 var listenerRecycleInterval = GetListenerRecycleInterval();
@@ -1498,6 +1499,9 @@ async Task ServeFileAsync(HttpListenerContext context, string filePath, string c
     context.Response.StatusCode = 200;
     context.Response.ContentType = contentType;
     context.Response.ContentLength64 = bytes.LongLength;
+    context.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+    context.Response.Headers["Pragma"] = "no-cache";
+    context.Response.Headers["Expires"] = "0";
     await context.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length);
     context.Response.Close();
 }
@@ -4722,6 +4726,23 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
         return;
     }
 
+    byte[]? cachedMapPayloadBytes = null;
+    await runtime.MapCacheGate.WaitAsync();
+    try
+    {
+        cachedMapPayloadBytes = runtime.MapCachePayloadBytes;
+        if (cachedMapPayloadBytes is { Length: > 0 }
+            && DateTimeOffset.UtcNow - runtime.MapCacheRefreshedAtUtc < mapRefreshInterval)
+        {
+            await WriteJsonResponseBytesAsync(context, 200, cachedMapPayloadBytes);
+            return;
+        }
+    }
+    finally
+    {
+        runtime.MapCacheGate.Release();
+    }
+
     if (runtime.LatestServerPairing?.Data is null)
     {
         await WriteJsonResponseAsync(context, 400, new
@@ -4748,7 +4769,7 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
         await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
         isConnected = true;
 
-        var mapResponse = await rustPlus.GetMapAsync().WaitAsync(rustPlusRequestTimeout);
+        var mapResponse = await rustPlus.GetMapAsync().WaitAsync(rustPlusMapRequestTimeout);
         var markersResponse = await rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout);
 
         if (!mapResponse.IsSuccess || mapResponse.Data is null)
@@ -4860,6 +4881,12 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
     }
     catch (TimeoutException)
     {
+        if (cachedMapPayloadBytes is { Length: > 0 })
+        {
+            await WriteJsonResponseBytesAsync(context, 200, cachedMapPayloadBytes);
+            return;
+        }
+
         await WriteRustPlusTimeoutAsync(context, "load map");
     }
     catch (Exception ex)
@@ -5843,6 +5870,12 @@ static IReadOnlyDictionary<int, ItemIconMetadata> LoadItemIconIndex(string itemI
         return index;
     }
 
+    var availablePngFileNames = Directory.EnumerateFiles(itemIconsFolderPath, "*.png", SearchOption.TopDirectoryOnly)
+        .Select(Path.GetFileName)
+        .OfType<string>()
+        .Where(static fileName => !string.IsNullOrWhiteSpace(fileName))
+        .ToArray();
+
     foreach (var jsonFilePath in Directory.EnumerateFiles(itemIconsFolderPath, "*.json", SearchOption.TopDirectoryOnly))
     {
         try
@@ -5873,19 +5906,8 @@ static IReadOnlyDictionary<int, ItemIconMetadata> LoadItemIconIndex(string itemI
             }
 
             var preferredPngFileName = $"{shortName}.png";
-            var preferredPngFilePath = Path.Combine(itemIconsFolderPath, preferredPngFileName);
             var fallbackPngFileName = Path.ChangeExtension(Path.GetFileName(jsonFilePath), ".png");
-            var fallbackPngFilePath = Path.Combine(itemIconsFolderPath, fallbackPngFileName);
-
-            string? selectedPngFileName = null;
-            if (File.Exists(preferredPngFilePath))
-            {
-                selectedPngFileName = preferredPngFileName;
-            }
-            else if (File.Exists(fallbackPngFilePath))
-            {
-                selectedPngFileName = fallbackPngFileName;
-            }
+            var selectedPngFileName = ResolveItemIconFileName(shortName, fallbackPngFileName, availablePngFileNames);
 
             if (selectedPngFileName is null)
             {
@@ -5903,6 +5925,90 @@ static IReadOnlyDictionary<int, ItemIconMetadata> LoadItemIconIndex(string itemI
     }
 
     return index;
+}
+
+static string? ResolveItemIconFileName(string shortName, string fallbackPngFileName, IReadOnlyList<string> availablePngFileNames)
+{
+    if (availablePngFileNames.Count == 0)
+    {
+        return null;
+    }
+
+    foreach (var candidate in availablePngFileNames)
+    {
+        if (string.Equals(candidate, $"{shortName}.png", StringComparison.OrdinalIgnoreCase))
+        {
+            return candidate;
+        }
+    }
+
+    foreach (var candidate in availablePngFileNames)
+    {
+        if (string.Equals(candidate, fallbackPngFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return candidate;
+        }
+    }
+
+    var shortNameKey = NormalizeItemIconLookupKey(shortName);
+    var fallbackKey = NormalizeItemIconLookupKey(Path.GetFileNameWithoutExtension(fallbackPngFileName));
+
+    string? bestMatch = null;
+    var bestScore = int.MinValue;
+
+    foreach (var candidate in availablePngFileNames)
+    {
+        var candidateKey = NormalizeItemIconLookupKey(Path.GetFileNameWithoutExtension(candidate));
+        if (string.IsNullOrEmpty(candidateKey))
+        {
+            continue;
+        }
+
+        var matchedKey = GetItemIconMatchKey(shortNameKey, fallbackKey, candidateKey);
+        if (matchedKey is null)
+        {
+            continue;
+        }
+
+        var score = matchedKey.Length * 100 - Math.Abs(candidateKey.Length - matchedKey.Length);
+        if (score > bestScore || (score == bestScore && string.CompareOrdinal(candidate, bestMatch) < 0))
+        {
+            bestMatch = candidate;
+            bestScore = score;
+        }
+    }
+
+    return bestMatch;
+}
+
+static string NormalizeItemIconLookupKey(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return string.Empty;
+    }
+
+    return string.Concat(value.Where(char.IsLetterOrDigit)).ToLowerInvariant();
+}
+
+static string? GetItemIconMatchKey(string shortNameKey, string fallbackKey, string candidateKey)
+{
+    if (string.IsNullOrEmpty(candidateKey))
+    {
+        return null;
+    }
+
+    if (candidateKey.Contains(shortNameKey, StringComparison.Ordinal) || shortNameKey.Contains(candidateKey, StringComparison.Ordinal))
+    {
+        return candidateKey.Length >= shortNameKey.Length ? shortNameKey : candidateKey;
+    }
+
+    if (candidateKey.Contains(fallbackKey, StringComparison.Ordinal) || fallbackKey.Contains(candidateKey, StringComparison.Ordinal))
+    {
+        return candidateKey.Length >= fallbackKey.Length ? fallbackKey : candidateKey;
+    }
+
+    return null;
 }
 
 static UserAccountsStore LoadUserAccounts(string filePath)
