@@ -1968,6 +1968,53 @@ body.auth-locked {
   justify-self: center;
 }
 
+.virtual-monitor-search-bar {
+  width: min(360px, 100%);
+  margin: 10px auto 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.virtual-monitor-search {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  background: #1e1e1e;
+  border: 1px solid #555555;
+  border-radius: 4px;
+  color: #e0e0e0;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  outline: none;
+  font-family: inherit;
+}
+
+.virtual-monitor-search::placeholder {
+  color: #888888;
+}
+
+.virtual-monitor-search:focus {
+  border-color: #45d7ff;
+}
+
+.virtual-monitor-sort {
+  flex-shrink: 0;
+  background: #1e1e1e;
+  border: 1px solid #555555;
+  border-radius: 4px;
+  color: #e0e0e0;
+  padding: 6px 6px;
+  font-size: 0.8rem;
+  outline: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.virtual-monitor-sort:focus {
+  border-color: #45d7ff;
+}
+
 .monitor-item.is-collapsed .monitor-crate {
   display: none;
 }

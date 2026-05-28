@@ -910,6 +910,9 @@
     let monitorLastBulkRefreshAtMs = 0;
     const monitorLastRefreshById = new Map();
     const monitorItemsById = new Map();
+    let itemCategoriesLookup = null;
+    let itemCategoriesLoadPromise = null;
+    const CATEGORY_SORT_ORDER = ['Weapon', 'Ammunition', 'Medical', 'Food', 'Resources', 'Component', 'Attire', 'Tool', 'Electrical', 'Construction', 'Traps', 'Fun', 'Items', 'Misc'];
     const pendingSwitchOperationIds = new Set();
     let activeVirtualMonitorWiringId = null;
     let mySystemImageObjectUrl = null;
@@ -3390,6 +3393,15 @@
       return (normalized * projection.worldHeight) - projection.oceanMargin;
     }
 
+    // For markers from GetMapMarkers whose coords are world-relative (origin = world edge, includes ocean).
+    function projectWorldToCanvasX(worldX, projection) {
+      return (worldX / projection.worldWidth) * mapCanvas.width;
+    }
+
+    function projectWorldToCanvasY(worldY, projection) {
+      return mapCanvas.height - ((worldY / projection.worldHeight) * mapCanvas.height);
+    }
+
     function updateMapDebugOverlay() {
       if (!mapDebugPanel) {
         return;
@@ -3554,8 +3566,8 @@
           return;
         }
 
-        const x = projectMapToCanvasX(marker.x, mapRenderContext);
-        const y = projectMapToCanvasY(marker.y, mapRenderContext);
+        const x = projectWorldToCanvasX(marker.x, mapRenderContext);
+        const y = projectWorldToCanvasY(marker.y, mapRenderContext);
         const markerType = marker.type;
         let renderX = x;
         let renderY = y;
@@ -3916,8 +3928,8 @@
           return;
         }
 
-        const x = projectMapToCanvasX(marker.x, mainMapRenderContext);
-        const y = projectMapToCanvasY(marker.y, mainMapRenderContext);
+        const x = projectWorldToCanvasX(marker.x, mainMapRenderContext);
+        const y = projectWorldToCanvasY(marker.y, mainMapRenderContext);
         const markerType = marker.type;
 
         if (markerType === 'cargoShip') {
@@ -4942,8 +4954,29 @@
             <button type="button" class="switch-action virtual-monitor-remove" data-id="${virtualMonitorEntry.id}">Remove Virtual Box</button>
           </div>
         </div>
+        <div class="virtual-monitor-search-bar">
+          <input type="search" class="virtual-monitor-search" data-virtual-monitor-id="${virtualMonitorEntry.id}" placeholder="Search items..." autocomplete="off" />
+          <select class="virtual-monitor-sort" data-virtual-monitor-id="${virtualMonitorEntry.id}" title="Sort order">
+            <option value="category">By Category</option>
+            <option value="name">By Name</option>
+          </select>
+        </div>
         <div class="monitor-virtual-grid" data-id="${virtualMonitorEntry.id}"></div>
       `;
+
+      const searchInput = item.querySelector('.virtual-monitor-search');
+      if (searchInput) {
+        searchInput.addEventListener('input', () => {
+          renderVirtualMonitorCombinedItems(virtualMonitorEntry.id);
+        });
+      }
+
+      const sortSelect = item.querySelector('.virtual-monitor-sort');
+      if (sortSelect) {
+        sortSelect.addEventListener('change', () => {
+          renderVirtualMonitorCombinedItems(virtualMonitorEntry.id);
+        });
+      }
 
       virtualMonitorList.appendChild(item);
     }
@@ -5056,8 +5089,32 @@
       setMonitorItemCount(monitorId, items.length);
     }
 
+    function loadItemCategories() {
+      if (itemCategoriesLookup !== null) {
+        return Promise.resolve(itemCategoriesLookup);
+      }
+      if (!itemCategoriesLoadPromise) {
+        itemCategoriesLoadPromise = fetch('/resources/item-categories.json')
+          .then((r) => r.json())
+          .then((data) => {
+            itemCategoriesLookup = data;
+            return data;
+          })
+          .catch(() => {
+            itemCategoriesLookup = {};
+            return {};
+          });
+      }
+      return itemCategoriesLoadPromise;
+    }
 
-    function getVirtualMonitorCombinedItems(virtualMonitorId) {
+    function getItemCategoryOrder(shortName) {
+      const cat = itemCategoriesLookup?.[String(shortName ?? '')] ?? 'Misc';
+      const idx = CATEGORY_SORT_ORDER.indexOf(cat);
+      return idx === -1 ? CATEGORY_SORT_ORDER.length : idx;
+    }
+
+    function getVirtualMonitorCombinedItems(virtualMonitorId, sortMode) {
       const linkedMonitorIds = getLinkedMonitorIds(virtualMonitorId);
       const itemMap = new Map();
 
@@ -5083,7 +5140,20 @@
         });
       });
 
-      return Array.from(itemMap.values()).sort((left, right) => String(left.itemId ?? left.shortName ?? '').localeCompare(String(right.itemId ?? right.shortName ?? '')));
+      const items = Array.from(itemMap.values());
+      const mode = sortMode || 'category';
+
+      if (mode === 'category') {
+        items.sort((left, right) => {
+          const catDiff = getItemCategoryOrder(left.shortName) - getItemCategoryOrder(right.shortName);
+          if (catDiff !== 0) { return catDiff; }
+          return String(left.shortName ?? left.itemId ?? '').localeCompare(String(right.shortName ?? right.itemId ?? ''));
+        });
+      } else {
+        items.sort((left, right) => String(left.shortName ?? left.itemId ?? '').localeCompare(String(right.shortName ?? right.itemId ?? '')));
+      }
+
+      return items;
     }
 
 
@@ -5113,11 +5183,26 @@
         return;
       }
 
-      const combinedItems = getVirtualMonitorCombinedItems(virtualMonitorId);
-      const slotCount = getVirtualMonitorSlotCount(combinedItems);
-      const rowCount = Math.max(8, Math.ceil(slotCount / 6));
+      const searchInput = virtualMonitorList.querySelector(`.virtual-monitor-search[data-virtual-monitor-id="${virtualMonitorId}"]`);
+      const sortSelect = virtualMonitorList.querySelector(`.virtual-monitor-sort[data-virtual-monitor-id="${virtualMonitorId}"]`);
+      const query = searchInput?.value?.trim().toLowerCase() || '';
+      const sortMode = sortSelect?.value || 'category';
+
+      // Ensure category data is loaded; re-render after load if not yet available.
+      if (itemCategoriesLookup === null && sortMode === 'category') {
+        loadItemCategories().then(() => renderVirtualMonitorCombinedItems(virtualMonitorId));
+      }
+
+      const combinedItems = getVirtualMonitorCombinedItems(virtualMonitorId, sortMode);
+
+      const itemsToRender = query
+        ? combinedItems.filter((item) => String(item.shortName ?? item.itemId ?? '').toLowerCase().includes(query))
+        : combinedItems;
+
+      const slotCount = query ? Math.max(1, itemsToRender.length) : getVirtualMonitorSlotCount(combinedItems);
+      const rowCount = Math.max(query ? 1 : 8, Math.ceil(slotCount / 6));
       virtualGrid.style.setProperty('--virtual-monitor-rows', String(rowCount));
-      renderItemSlots(virtualGrid, combinedItems, slotCount);
+      renderItemSlots(virtualGrid, itemsToRender, slotCount);
       syncVirtualMonitorCardHeight(virtualMonitorId);
       setVirtualMonitorItemCount(virtualMonitorId, combinedItems.length);
       setVirtualMonitorLinkedCount(virtualMonitorId);
