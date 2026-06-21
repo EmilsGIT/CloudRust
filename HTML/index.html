@@ -106,7 +106,6 @@
               <li class="info-row"><span class="event-label"><img src="../Icons/chinook47.png" alt="Chinook 47 Locked Crate" class="event-icon" />Chinook 47 Locked Crate Event</span><span id="infoChinook47">Loading...</span></li>
               <li class="info-row"><span class="event-label"><img src="../Icons/PatrolHelicopter.png" alt="Patrol Helicopter" class="event-icon" />Patrol Helicopter Event</span><span id="infoPatrolHelicopter">Loading...</span></li>
               <li class="info-row"><span class="event-label"><img src="../Icons/traveling-vendor.png" alt="Travelling Vendor" class="event-icon" />Travelling Vendor</span><span id="infoTravelingVendor">Loading...</span></li>
-              <li class="info-row"><span class="event-label"><img src="../Icons/deepSea.png" alt="The Deep Sea" class="event-icon" />The Deep Sea</span><span id="infoDeepSea">Loading...</span></li>
             </ul>
             <p class="info-footnote" id="infoFootnote"></p>
           </div>
@@ -116,7 +115,7 @@
             <ul class="team-list" id="teamList"></ul>
             <p class="info-footnote" id="teamFootnote"></p>
           </div>
-        </section>
+        </div>
       </section>
 
       <section class="tab-panel" data-panel="map">
@@ -127,10 +126,24 @@
                 <h3 class="team-title">Map</h3>
                 <p id="mainMapStatus" class="map-status">Waiting to load map.</p>
               </div>
-              <button id="mainMapRefreshButton" class="ok-button map-tab-refresh-button" type="button">Refresh</button>
+              <div class="map-tab-header-actions">
+                <button id="mainMapCalibrationToggleButton" class="auth-mode-button" type="button">Show Calibration Tools</button>
+                <button id="mainMapRefreshButton" class="ok-button map-tab-refresh-button" type="button">Refresh</button>
+              </div>
             </div>
-            <canvas id="mainMapCanvas" class="map-canvas map-tab-canvas" width="900" height="900"></canvas>
+            <div id="mainMapCalibrationToolbar" class="map-tab-calibration-toolbar" hidden>
+              <p class="info-footnote map-tab-calibration-copy">Drag the calibration labels onto their exact map positions to capture calibration points, including the two oil rigs.</p>
+              <div class="map-tab-calibration-actions">
+                <button id="mainMapCalibrationResetButton" class="auth-mode-button" type="button">Reset Targets</button>
+                <button id="mainMapCalibrationCopyButton" class="auth-mode-button" type="button">Copy Data</button>
+              </div>
+            </div>
+            <div class="map-tab-stage">
+              <canvas id="mainMapCanvas" class="map-canvas map-tab-canvas" width="900" height="900"></canvas>
+              <div id="mainMapCalibrationOverlay" class="map-calibration-overlay" aria-label="Map calibration overlay" hidden></div>
+            </div>
             <ul id="mainMapLegend" class="info-list map-legend"></ul>
+            <pre id="mainMapCalibrationData" class="map-debug-panel map-calibration-data" hidden>Waiting for map calibration data.</pre>
             <p id="mainMapFootnote" class="info-footnote"></p>
           </div>
         </div>
@@ -858,7 +871,6 @@
     const infoChinook47 = document.getElementById('infoChinook47');
     const infoPatrolHelicopter = document.getElementById('infoPatrolHelicopter');
     const infoTravelingVendor = document.getElementById('infoTravelingVendor');
-    const infoDeepSea = document.getElementById('infoDeepSea');
     const infoFootnote = document.getElementById('infoFootnote');
     const teamList = document.getElementById('teamList');
     const teamFootnote = document.getElementById('teamFootnote');
@@ -940,6 +952,7 @@
     const pairingStopButton = document.getElementById('pairingStopButton');
     const mySystemImageMaxBytes = 20 * 1024 * 1024;
     const mySystemPlacedDevicesStorageKey = 'rustplus.mySystemPlacedDevices';
+    const mapCalibrationStorageKey = 'rustplus.mapCalibrationPlacements';
     const serverBackedStorageKeys = new Set([
       switchStorageKey,
       monitorStorageKey,
@@ -951,8 +964,30 @@
       virtualSwitchLinkJointsStorageKey,
       virtualMonitorLinkJointsStorageKey,
       mySystemPlacedDevicesStorageKey,
+      mapCalibrationStorageKey,
       systemHelpSeenStorageKey
     ]);
+    const mapCalibrationTargets = [
+      { id: 'airfield', label: 'The Airfield', monumentNames: ['airfield_display_name'] },
+      { id: 'junkyard', label: 'The Junkyard', monumentNames: ['junkyard_display_name'] },
+      { id: 'outpost', label: 'The Outpost', monumentNames: ['outpost'] },
+      { id: 'militaryTunnels', label: 'The Military Tunnels', monumentNames: ['military_tunnels_display_name'] },
+      { id: 'excavator', label: 'The Giant Excavator', monumentNames: ['excavator'] },
+      {
+        id: 'smallOilRig',
+        label: 'Small Oil Rig',
+        monumentNames: ['oil_rig_small', 'small oil rig', 'oil rig small', 'oilrigsmall', 'oilrig_1'],
+        matchKinds: ['smallOilRig'],
+        nameIncludes: ['oil_rig_small', 'small oil', 'oil rig small', 'oilrigsmall', 'oilrig_1']
+      },
+      {
+        id: 'largeOilRig',
+        label: 'Large Oil Rig',
+        monumentNames: ['large_oil_rig', 'large oil rig', 'oil rig large', 'oilriglarge', 'oilrig_2'],
+        matchKinds: ['largeOilRig'],
+        nameIncludes: ['large_oil_rig', 'large oil', 'oil rig large', 'oilriglarge', 'oilrig_2']
+      }
+    ];
     const mySystemNodeWidth = 42;
     const mySystemNodeHeight = 48;
     const mySystemNodePointerOffsetX = 21;
@@ -967,14 +1002,21 @@
     let fcmEventSource = null;
     let fcmReconnectTimer = null;
     const infoEventsRefreshIntervalMs = 30000;
-    const mapRefreshIntervalMs = 60000;
+    const mapMarkersRefreshIntervalMs = 5000;
+    const mapRefreshIntervalMs = 120000;
     const monitorRefreshIntervalMs = 60000;
     const monitorInterRequestDelayMs = 50;
     const switchInterRequestDelayMs = 50;
     const virtualSwitchInteractionDelayMs = 50;
+    const vendingOverlayScale = 0.48;
+    const vendingOverlayOffsetX = -110;
+    const vendingOverlayOffsetY = 60;
     let mapAutoRefreshTimer = null;
+    let mapMarkersAutoRefreshTimer = null;
     let mapLastRequestedAtMs = 0;
     let mapRequestInFlight = null;
+    let mapMarkersRequestInFlight = null;
+    let mapMarkersLastRequestedAtMs = 0;
     let infoEventsRequestInFlight = null;
     let infoEventsLastRequestedAtMs = 0;
     let teamStatusRequestInFlight = null;
@@ -984,6 +1026,8 @@
     const mapImagePromiseCache = new Map();
     let mapRenderContext = null;
     let mapDebugLastClick = null;
+    let mainMapCalibrationPlacements = null;
+    let mainMapCalibrationDragState = null;
     let monitorRefreshInFlight = null;
     let monitorLastBulkRefreshAtMs = 0;
     const monitorLastRefreshById = new Map();
@@ -1002,6 +1046,7 @@
     let switchLinkRenderScheduled = false;
     let monitorLinkRenderScheduled = false;
     let authMode = 'login';
+    let activeTabName = 'info';
     let appBootstrapStarted = false;
     let authInitializationCompleted = false;
     let authenticatedUser = null;
@@ -1052,6 +1097,10 @@
 
     function delay(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function clampNumber(value, min, max) {
+      return Math.min(Math.max(value, min), max);
     }
 
     function isServerBackedStorageKey(key) {
@@ -1776,7 +1825,7 @@
       const steamLoginViewerUrl = typeof steamLogin.viewerUrl === 'string' ? steamLogin.viewerUrl : '';
       const canOpenSteamLoginViewer = steamLoginRunning && Boolean(steamLoginViewerUrl);
       const steamDisplayName = getPairingSteamDisplayName();
-      const steamState = steamLoginRunning ? 'running' : hasConfig ? 'ready' : 'waiting';
+      const steamState = steamLoginRunning ? 'running' : (hasConfig && listenerConnected) ? 'ready' : 'waiting';
       const serverState = hasServerPairing ? 'ready' : listenerConnected ? 'waiting' : hasConfig ? 'running' : 'waiting';
       const pairingTabState = hasConfig && hasServerPairing ? 'ready' : 'default';
 
@@ -1795,9 +1844,9 @@
       if (steamLoginRunning) {
         pairingSteamLoginButton.textContent = 'Steam login in progress...';
       } else if (steamDisplayName) {
-        pairingSteamLoginButton.textContent = `Logged in as ${steamDisplayName}`;
+        pairingSteamLoginButton.textContent = listenerConnected ? `Logged in as ${steamDisplayName}` : `Reconnecting as ${steamDisplayName}...`;
       } else if (hasConfig) {
-        pairingSteamLoginButton.textContent = 'Logged in to Steam';
+        pairingSteamLoginButton.textContent = listenerConnected ? 'Logged in to Steam' : 'Reconnecting...';
       } else {
         pairingSteamLoginButton.textContent = 'Run Steam Login Flow';
       }
@@ -2416,6 +2465,8 @@
 
       clearFcmReconnectTimer();
       ensureMapAutoRefresh(false);
+      ensureMapMarkersAutoRefresh(false);
+      ensureMainMapAutoRefresh(false);
       if (fcmEventSource) {
         fcmEventSource.close();
         fcmEventSource = null;
@@ -3206,6 +3257,7 @@
     }
 
     function setActiveTab(tabName) {
+      activeTabName = tabName;
       const canAccessBugsTab = Boolean(authenticatedUser?.isAdmin || (authenticatedUser && secretBugsAccessUnlocked));
 
       if (tabName === 'bugs' && !canAccessBugsTab) {
@@ -3254,6 +3306,7 @@
 
       ensureMapAutoRefresh(tabName === 'bugs' && canAccessBugsTab);
       ensureMainMapAutoRefresh(tabName === 'map');
+      ensureMapMarkersAutoRefresh((tabName === 'bugs' && canAccessBugsTab) || tabName === 'map');
     }
 
     tabs.forEach((tab) => {
@@ -3332,7 +3385,6 @@
           infoChinook47.innerHTML = formatEventValue(byKey.chinook47);
           infoPatrolHelicopter.innerHTML = formatEventValue(byKey.patrolHelicopter);
           infoTravelingVendor.innerHTML = formatEventValue(byKey.travelingVendor);
-          infoDeepSea.innerHTML = formatEventValue(byKey.deepSea);
 
           const refreshedAt = payload.refreshedAtUtc ? new Date(payload.refreshedAtUtc).toLocaleString() : null;
           infoFootnote.textContent = refreshedAt ? `Last updated: ${refreshedAt}` : '';
@@ -3343,7 +3395,6 @@
           infoChinook47.textContent = 'Unavailable';
           infoPatrolHelicopter.textContent = 'Unavailable';
           infoTravelingVendor.textContent = 'Unavailable';
-          infoDeepSea.textContent = 'Unavailable';
           infoFootnote.textContent = `Info fetch failed: ${error.message}`;
         } finally {
           infoEventsRequestInFlight = null;
@@ -3475,63 +3526,483 @@
     }
 
     function projectMapToCanvasX(mapX, projection) {
-      const normalized = (mapX + projection.oceanMargin) / projection.worldWidth;
-      return normalized * mapCanvas.width;
+      return (mapX + projection.oceanMargin) * projection.scaleX;
     }
 
     function projectMapToCanvasY(mapY, projection) {
-      const normalized = (mapY + projection.oceanMargin) / projection.worldHeight;
-      return mapCanvas.height - (normalized * mapCanvas.height);
+      return (projection.worldHeight - mapY - projection.oceanMargin) * projection.scaleY;
     }
 
     function projectCanvasToMapX(canvasX, projection) {
-      const normalized = canvasX / mapCanvas.width;
-      return (normalized * projection.worldWidth) - projection.oceanMargin;
+      return (canvasX / projection.scaleX) - projection.oceanMargin;
     }
 
     function projectCanvasToMapY(canvasY, projection) {
-      const normalized = 1 - (canvasY / mapCanvas.height);
-      return (normalized * projection.worldHeight) - projection.oceanMargin;
+      return projection.worldHeight - (canvasY / projection.scaleY) - projection.oceanMargin;
     }
 
-    // For markers from GetMapMarkers whose coords are world-relative (origin = world edge, includes ocean).
+    // Debug track geometry is emitted in world-space (origin = world edge, includes ocean).
     function projectWorldToCanvasX(worldX, projection) {
-      return (worldX / projection.worldWidth) * mapCanvas.width;
+      return worldX * projection.scaleX;
     }
 
     function projectWorldToCanvasY(worldY, projection) {
-      return mapCanvas.height - ((worldY / projection.worldHeight) * mapCanvas.height);
+      return (projection.worldHeight - worldY) * projection.scaleY;
+    }
+
+    // Map markers align with monument/vending raw coordinates, not the debug world-space track coords.
+    function projectMarkerToCanvasPoint(marker, projection, canvasElement = mapCanvas) {
+      if (!marker || typeof marker.x !== 'number' || typeof marker.y !== 'number') {
+        return null;
+      }
+
+      return projectStaticRawPointToCanvas(marker.x, marker.y, projection, canvasElement);
+    }
+
+    function isSmallOilRigMonument(monument) {
+      if (monument?.kind === 'smallOilRig') {
+        return true;
+      }
+
+      const name = typeof monument?.name === 'string' ? monument.name.trim().toLowerCase() : '';
+      return name.includes('oil_rig_small')
+        || name.includes('small oil')
+        || name.includes('oil rig small')
+        || name.includes('oilrigsmall')
+        || name.includes('oilrig_1');
+    }
+
+    function isLargeOilRigMonument(monument) {
+      if (monument?.kind === 'largeOilRig') {
+        return true;
+      }
+
+      const name = typeof monument?.name === 'string' ? monument.name.trim().toLowerCase() : '';
+      return name.includes('large_oil_rig')
+        || name.includes('large oil')
+        || name.includes('oil rig large')
+        || name.includes('oilriglarge')
+        || name.includes('oilrig_2');
+    }
+
+    function applyMarkerOverlayProjection(canvasX, canvasY, markerType, canvasElement) {
+      return { x: canvasX, y: canvasY };
     }
 
     function drawProjectedMapImage(context, image, canvasWidth, canvasHeight, mapWidth, mapHeight, oceanMargin) {
-      const safeMapWidth = Number(mapWidth) || 0;
-      const safeMapHeight = Number(mapHeight) || 0;
-      const safeOceanMargin = Number(oceanMargin) || 0;
-      const worldWidth = safeMapWidth + (safeOceanMargin * 2);
-      const worldHeight = safeMapHeight + (safeOceanMargin * 2);
-      const imageWidth = Number(image?.naturalWidth || image?.width) || 0;
-      const imageHeight = Number(image?.naturalHeight || image?.height) || 0;
-      const hasTerrainSizedImage = safeOceanMargin > 0
-        && imageWidth > 0
-        && imageHeight > 0
-        && Math.abs(imageWidth - safeMapWidth) <= 1
-        && Math.abs(imageHeight - safeMapHeight) <= 1
-        && worldWidth > 0
-        && worldHeight > 0;
-
       context.fillStyle = '#2f2f2f';
       context.fillRect(0, 0, canvasWidth, canvasHeight);
 
-      if (hasTerrainSizedImage) {
-        const drawX = (safeOceanMargin / worldWidth) * canvasWidth;
-        const drawY = (safeOceanMargin / worldHeight) * canvasHeight;
-        const drawWidth = (safeMapWidth / worldWidth) * canvasWidth;
-        const drawHeight = (safeMapHeight / worldHeight) * canvasHeight;
-        context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+      context.drawImage(image, 0, 0, canvasWidth, canvasHeight);
+    }
+
+    function getDefaultMainMapCalibrationPlacements() {
+      return Object.fromEntries(mapCalibrationTargets.map((target, index) => [
+        target.id,
+        {
+          normalizedX: 0.1,
+          normalizedY: 0.1 + (index * 0.11)
+        }
+      ]));
+    }
+
+    function sanitizeMainMapCalibrationPlacements(rawValue) {
+      const defaults = getDefaultMainMapCalibrationPlacements();
+      const source = rawValue && typeof rawValue === 'object' ? rawValue : {};
+
+      return Object.fromEntries(mapCalibrationTargets.map((target) => {
+        const candidate = source[target.id] && typeof source[target.id] === 'object'
+          ? source[target.id]
+          : {};
+        const fallback = defaults[target.id];
+        const normalizedX = Number(candidate.normalizedX);
+        const normalizedY = Number(candidate.normalizedY);
+
+        return [
+          target.id,
+          {
+            normalizedX: Number.isFinite(normalizedX) ? clampNumber(normalizedX, 0, 1) : fallback.normalizedX,
+            normalizedY: Number.isFinite(normalizedY) ? clampNumber(normalizedY, 0, 1) : fallback.normalizedY
+          }
+        ];
+      }));
+    }
+
+    function ensureMainMapCalibrationPlacementsLoaded() {
+      if (mainMapCalibrationPlacements) {
+        return mainMapCalibrationPlacements;
+      }
+
+      const raw = readStoredValue(mapCalibrationStorageKey);
+      if (!raw) {
+        mainMapCalibrationPlacements = getDefaultMainMapCalibrationPlacements();
+        return mainMapCalibrationPlacements;
+      }
+
+      try {
+        mainMapCalibrationPlacements = sanitizeMainMapCalibrationPlacements(JSON.parse(raw));
+      } catch {
+        mainMapCalibrationPlacements = getDefaultMainMapCalibrationPlacements();
+      }
+
+      return mainMapCalibrationPlacements;
+    }
+
+    function persistMainMapCalibrationPlacements() {
+      if (!mainMapCalibrationPlacements) {
         return;
       }
 
-      context.drawImage(image, 0, 0, canvasWidth, canvasHeight);
+      writeStoredValue(mapCalibrationStorageKey, JSON.stringify(mainMapCalibrationPlacements));
+    }
+
+    function resetMainMapCalibrationPlacements() {
+      mainMapCalibrationPlacements = getDefaultMainMapCalibrationPlacements();
+      persistMainMapCalibrationPlacements();
+    }
+
+    function normalizeMonumentName(name) {
+      return typeof name === 'string' ? name.trim().toLowerCase() : '';
+    }
+
+    function getMainMapCalibrationMonuments(payload) {
+      return Array.isArray(payload?.map?.monuments) ? payload.map.monuments : [];
+    }
+
+    function getMainMapCalibrationMonumentMatch(target, payload) {
+      const monuments = getMainMapCalibrationMonuments(payload);
+      const expectedNames = Array.isArray(target?.monumentNames)
+        ? target.monumentNames.map(normalizeMonumentName).filter(Boolean)
+        : [];
+      const expectedKinds = Array.isArray(target?.matchKinds)
+        ? target.matchKinds.filter((value) => typeof value === 'string' && value.length > 0)
+        : [];
+      const partialNames = Array.isArray(target?.nameIncludes)
+        ? target.nameIncludes.map(normalizeMonumentName).filter(Boolean)
+        : [];
+
+      const matchedByKind = monuments.find((monument) => expectedKinds.includes(monument?.kind));
+      if (matchedByKind) {
+        return matchedByKind;
+      }
+
+      const matchedByExactName = monuments.find((monument) => expectedNames.includes(normalizeMonumentName(monument?.name)));
+      if (matchedByExactName) {
+        return matchedByExactName;
+      }
+
+      return monuments.find((monument) => {
+        const normalizedName = normalizeMonumentName(monument?.name);
+        return partialNames.some((candidate) => normalizedName.includes(candidate));
+      }) || null;
+    }
+
+    function getMainMapCalibrationMonumentCatalog(payload) {
+      return getMainMapCalibrationMonuments(payload)
+        .filter((monument) => typeof monument?.x === 'number' && typeof monument?.y === 'number')
+        .map((monument) => ({
+          name: monument?.name ?? null,
+          normalizedName: normalizeMonumentName(monument?.name) || null,
+          kind: monument?.kind ?? null,
+          x: monument.x,
+          y: monument.y
+        }))
+        .sort((left, right) => {
+          const leftKind = left.kind || '';
+          const rightKind = right.kind || '';
+          if (leftKind !== rightKind) {
+            return leftKind.localeCompare(rightKind);
+          }
+
+          return String(left.name || '').localeCompare(String(right.name || ''));
+        });
+    }
+
+    function getMainMapCalibrationCanvasPoint(targetId, canvasElement = mainMapCanvas) {
+      const placements = ensureMainMapCalibrationPlacementsLoaded();
+      const placement = placements[targetId];
+      if (!placement || !canvasElement) {
+        return null;
+      }
+
+      return {
+        normalizedX: placement.normalizedX,
+        normalizedY: placement.normalizedY,
+        canvasX: placement.normalizedX * canvasElement.width,
+        canvasY: placement.normalizedY * canvasElement.height
+      };
+    }
+
+    function getMainMapCalibrationOverlayPoint(targetId, overlayElement) {
+      const placements = ensureMainMapCalibrationPlacementsLoaded();
+      const placement = placements[targetId];
+      if (!placement || !overlayElement) {
+        return null;
+      }
+
+      return {
+        normalizedX: placement.normalizedX,
+        normalizedY: placement.normalizedY,
+        overlayX: placement.normalizedX * overlayElement.clientWidth,
+        overlayY: placement.normalizedY * overlayElement.clientHeight
+      };
+    }
+
+    function solveLinearSystem3x3(matrix, vector) {
+      const rows = matrix.map((row, index) => [...row, vector[index]]);
+
+      for (let pivotIndex = 0; pivotIndex < 3; pivotIndex += 1) {
+        let bestRowIndex = pivotIndex;
+        for (let rowIndex = pivotIndex + 1; rowIndex < 3; rowIndex += 1) {
+          if (Math.abs(rows[rowIndex][pivotIndex]) > Math.abs(rows[bestRowIndex][pivotIndex])) {
+            bestRowIndex = rowIndex;
+          }
+        }
+
+        if (Math.abs(rows[bestRowIndex][pivotIndex]) < 0.000001) {
+          return null;
+        }
+
+        if (bestRowIndex !== pivotIndex) {
+          const temp = rows[pivotIndex];
+          rows[pivotIndex] = rows[bestRowIndex];
+          rows[bestRowIndex] = temp;
+        }
+
+        const pivot = rows[pivotIndex][pivotIndex];
+        for (let columnIndex = pivotIndex; columnIndex < 4; columnIndex += 1) {
+          rows[pivotIndex][columnIndex] /= pivot;
+        }
+
+        for (let rowIndex = 0; rowIndex < 3; rowIndex += 1) {
+          if (rowIndex === pivotIndex) {
+            continue;
+          }
+
+          const factor = rows[rowIndex][pivotIndex];
+          for (let columnIndex = pivotIndex; columnIndex < 4; columnIndex += 1) {
+            rows[rowIndex][columnIndex] -= factor * rows[pivotIndex][columnIndex];
+          }
+        }
+      }
+
+      return [rows[0][3], rows[1][3], rows[2][3]];
+    }
+
+    function fitAffineTransform(samples) {
+      if (!Array.isArray(samples) || samples.length < 3) {
+        return null;
+      }
+
+      let sumXX = 0;
+      let sumXY = 0;
+      let sumYY = 0;
+      let sumX = 0;
+      let sumY = 0;
+      let sumTargetX = 0;
+      let sumTargetY = 0;
+      let sumSourceTargetXX = 0;
+      let sumSourceTargetYX = 0;
+      let sumSourceTargetXY = 0;
+      let sumSourceTargetYY = 0;
+
+      samples.forEach((sample) => {
+        sumXX += sample.rawX * sample.rawX;
+        sumXY += sample.rawX * sample.rawY;
+        sumYY += sample.rawY * sample.rawY;
+        sumX += sample.rawX;
+        sumY += sample.rawY;
+        sumTargetX += sample.canvasX;
+        sumTargetY += sample.canvasY;
+        sumSourceTargetXX += sample.rawX * sample.canvasX;
+        sumSourceTargetYX += sample.rawY * sample.canvasX;
+        sumSourceTargetXY += sample.rawX * sample.canvasY;
+        sumSourceTargetYY += sample.rawY * sample.canvasY;
+      });
+
+      const normalMatrix = [
+        [sumXX, sumXY, sumX],
+        [sumXY, sumYY, sumY],
+        [sumX, sumY, samples.length]
+      ];
+
+      const xCoefficients = solveLinearSystem3x3(normalMatrix, [sumSourceTargetXX, sumSourceTargetYX, sumTargetX]);
+      const yCoefficients = solveLinearSystem3x3(normalMatrix, [sumSourceTargetXY, sumSourceTargetYY, sumTargetY]);
+
+      if (!xCoefficients || !yCoefficients) {
+        return null;
+      }
+
+      return {
+        sampleCount: samples.length,
+        canvasX: {
+          rawX: xCoefficients[0],
+          rawY: xCoefficients[1],
+          bias: xCoefficients[2]
+        },
+        canvasY: {
+          rawX: yCoefficients[0],
+          rawY: yCoefficients[1],
+          bias: yCoefficients[2]
+        }
+      };
+    }
+
+    function applyAffineTransformToCanvasPoint(rawX, rawY, affineTransform) {
+      if (!affineTransform || !Number.isFinite(rawX) || !Number.isFinite(rawY)) {
+        return null;
+      }
+
+      return {
+        x: (affineTransform.canvasX.rawX * rawX) + (affineTransform.canvasX.rawY * rawY) + affineTransform.canvasX.bias,
+        y: (affineTransform.canvasY.rawX * rawX) + (affineTransform.canvasY.rawY * rawY) + affineTransform.canvasY.bias
+      };
+    }
+
+    function projectStaticRawPointToCanvas(rawX, rawY, projection, canvasElement = mainMapCanvas) {
+      if (!projection || !canvasElement || !Number.isFinite(rawX) || !Number.isFinite(rawY)) {
+        return null;
+      }
+
+      return {
+        x: ((rawX * 0.5) + projection.oceanMargin) * (canvasElement.width / projection.mapWidth),
+        y: (projection.mapHeight - ((rawY * 0.5) + projection.oceanMargin)) * (canvasElement.height / projection.mapHeight)
+      };
+    }
+
+    function projectCalibratedStaticPoint(rawX, rawY, projection, affineTransform) {
+      const calibratedPoint = applyAffineTransformToCanvasPoint(rawX, rawY, affineTransform);
+      if (calibratedPoint) {
+        return calibratedPoint;
+      }
+
+      return {
+        x: projectMapToCanvasX(rawX, projection),
+        y: projectMapToCanvasY(rawY, projection)
+      };
+    }
+
+    function buildMainMapCalibrationData(payload) {
+      const entries = mapCalibrationTargets.map((target) => {
+        const rawMonument = getMainMapCalibrationMonumentMatch(target, payload);
+        const placedPoint = getMainMapCalibrationCanvasPoint(target.id);
+        return {
+          id: target.id,
+          label: target.label,
+          monumentName: rawMonument?.name ?? null,
+          rawX: typeof rawMonument?.x === 'number' ? rawMonument.x : null,
+          rawY: typeof rawMonument?.y === 'number' ? rawMonument.y : null,
+          canvasX: placedPoint?.canvasX ?? null,
+          canvasY: placedPoint?.canvasY ?? null,
+          normalizedX: placedPoint?.normalizedX ?? null,
+          normalizedY: placedPoint?.normalizedY ?? null
+        };
+      });
+      const monumentCatalog = getMainMapCalibrationMonumentCatalog(payload);
+
+      const samples = entries
+        .filter((entry) => Number.isFinite(entry.rawX) && Number.isFinite(entry.rawY) && Number.isFinite(entry.canvasX) && Number.isFinite(entry.canvasY))
+        .map((entry) => ({
+          rawX: entry.rawX,
+          rawY: entry.rawY,
+          canvasX: entry.canvasX,
+          canvasY: entry.canvasY
+        }));
+
+      return {
+        map: mainMapRenderContext
+          ? {
+              width: mainMapRenderContext.mapWidth,
+              height: mainMapRenderContext.mapHeight,
+              oceanMargin: mainMapRenderContext.oceanMargin,
+              canvasWidth: mainMapCanvas?.width ?? null,
+              canvasHeight: mainMapCanvas?.height ?? null
+            }
+          : null,
+        targets: entries,
+        unmatchedTargets: entries.filter((entry) => !Number.isFinite(entry.rawX) || !Number.isFinite(entry.rawY)).map((entry) => ({
+          id: entry.id,
+          label: entry.label
+        })),
+        monumentCatalog,
+        affineTransform: fitAffineTransform(samples)
+      };
+    }
+
+    function getMainMapCalibrationTransform(payload) {
+      return buildMainMapCalibrationData(payload).affineTransform;
+    }
+
+    function setMainMapCalibrationVisibility(visible) {
+      mainMapCalibrationVisible = Boolean(visible);
+
+      if (mainMapCalibrationToolbar) {
+        mainMapCalibrationToolbar.hidden = !mainMapCalibrationVisible;
+      }
+
+      if (mainMapCalibrationOverlay) {
+        mainMapCalibrationOverlay.hidden = !mainMapCalibrationVisible;
+      }
+
+      if (mainMapCalibrationData) {
+        mainMapCalibrationData.hidden = !mainMapCalibrationVisible;
+      }
+
+      if (mainMapCalibrationToggleButton) {
+        mainMapCalibrationToggleButton.textContent = mainMapCalibrationVisible
+          ? 'Hide Calibration Tools'
+          : 'Show Calibration Tools';
+      }
+    }
+
+    function updateMainMapCalibrationPanel(payload) {
+      if (!mainMapCalibrationData) {
+        return;
+      }
+
+      if (!payload || !mainMapRenderContext) {
+        mainMapCalibrationData.textContent = 'Waiting for map calibration data.';
+        return;
+      }
+
+      const calibrationData = buildMainMapCalibrationData(payload);
+      mainMapCalibrationData.textContent = JSON.stringify(calibrationData, null, 2);
+    }
+
+    function renderMainMapCalibrationOverlay(payload) {
+      if (!mainMapCalibrationOverlay || !mainMapRenderContext) {
+        return;
+      }
+
+      ensureMainMapCalibrationPlacementsLoaded();
+      mainMapCalibrationOverlay.innerHTML = '';
+
+      mapCalibrationTargets.forEach((target) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'map-calibration-chip';
+        chip.dataset.targetId = target.id;
+        chip.textContent = target.label;
+
+        const overlayPoint = getMainMapCalibrationOverlayPoint(target.id, mainMapCalibrationOverlay);
+        if (overlayPoint) {
+          chip.style.left = `${overlayPoint.normalizedX * 100}%`;
+          chip.style.top = `${overlayPoint.normalizedY * 100}%`;
+        }
+
+        const rawMonument = getMainMapCalibrationMonumentMatch(target, payload);
+        if (rawMonument && typeof rawMonument.x === 'number' && typeof rawMonument.y === 'number') {
+          chip.title = `${target.label}\nRaw monument: ${rawMonument.name}\nKind: ${rawMonument.kind || 'unknown'}\nRaw coords: (${rawMonument.x.toFixed(2)}, ${rawMonument.y.toFixed(2)})`;
+          chip.dataset.matched = 'true';
+        } else {
+          chip.title = `${target.label}\nRaw monument: not found in payload yet\nCheck the calibration data panel for the full monument catalog.`;
+          chip.dataset.matched = 'false';
+        }
+
+        mainMapCalibrationOverlay.appendChild(chip);
+      });
+
+      updateMainMapCalibrationPanel(payload);
     }
 
     function isCanvasPointInBounds(canvasX, canvasY, padding = 0) {
@@ -3944,12 +4415,13 @@
         .filter((marker) => marker?.type === 'cargoShip' || marker?.type === 'ch47');
       lines.push(`Moving markers on map: ${movingMarkers.length}`);
       movingMarkers.forEach((marker) => {
-        if (typeof marker?.x !== 'number' || typeof marker?.y !== 'number') {
+        const point = projectMarkerToCanvasPoint(marker, mapRenderContext, mapCanvas);
+        if (!point) {
           return;
         }
 
-        const canvasX = projectMapToCanvasX(marker.x, mapRenderContext);
-        const canvasY = projectMapToCanvasY(marker.y, mapRenderContext);
+        const canvasX = point.x;
+        const canvasY = point.y;
         const inBounds = isCanvasPointInBounds(canvasX, canvasY, 0);
         lines.push(`${marker.type === 'cargoShip' ? 'Cargo' : 'CH47'} #${marker.id}: map=(${marker.x.toFixed(2)}, ${marker.y.toFixed(2)}), canvas=(${canvasX.toFixed(1)}, ${canvasY.toFixed(1)}), inBounds=${inBounds}`);
       });
@@ -3992,6 +4464,79 @@
       mapAutoRefreshTimer = setInterval(() => {
         loadMapData();
       }, mapRefreshIntervalMs);
+    }
+
+    function mergeMapMarkersPayload(targetPayload, markersPayload) {
+      if (!targetPayload || !Array.isArray(markersPayload?.markers)) {
+        return false;
+      }
+
+      targetPayload.markers = markersPayload.markers;
+      return true;
+    }
+
+    async function loadMapMarkers(force = false) {
+      const now = Date.now();
+      if (!force) {
+        if (mapMarkersRequestInFlight) {
+          return mapMarkersRequestInFlight;
+        }
+
+        if ((now - mapMarkersLastRequestedAtMs) < mapMarkersRefreshIntervalMs) {
+          return null;
+        }
+      }
+
+      if (!latestMapPayload && !mainMapLatestPayload) {
+        return null;
+      }
+
+      mapMarkersLastRequestedAtMs = now;
+      mapMarkersRequestInFlight = (async () => {
+        const response = await fetch('/api/map/markers');
+        const payload = await response.json();
+
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.message || 'Failed to load map event markers.');
+        }
+
+        if (latestMapPayload) {
+          mergeMapMarkersPayload(latestMapPayload, payload);
+        }
+
+        if (mainMapLatestPayload) {
+          mergeMapMarkersPayload(mainMapLatestPayload, payload);
+        }
+
+        if (activeTabName === 'bugs' && latestMapPayload) {
+          await renderMap(latestMapPayload);
+        }
+
+        if (activeTabName === 'map' && mainMapLatestPayload) {
+          await renderMainMap(mainMapLatestPayload);
+        }
+      })();
+
+      try {
+        return await mapMarkersRequestInFlight;
+      } finally {
+        mapMarkersRequestInFlight = null;
+      }
+    }
+
+    function ensureMapMarkersAutoRefresh(isActive) {
+      if (mapMarkersAutoRefreshTimer) {
+        clearInterval(mapMarkersAutoRefreshTimer);
+        mapMarkersAutoRefreshTimer = null;
+      }
+
+      if (!isActive) {
+        return;
+      }
+
+      mapMarkersAutoRefreshTimer = setInterval(() => {
+        loadMapMarkers();
+      }, mapMarkersRefreshIntervalMs);
     }
 
     function getOrLoadMapImage(imageDataUrl) {
@@ -4105,9 +4650,24 @@
           return;
         }
 
-        const x = projectMapToCanvasX(monument.x, mapRenderContext);
-        const y = projectMapToCanvasY(monument.y, mapRenderContext);
+        const point = projectStaticRawPointToCanvas(monument.x, monument.y, mapRenderContext, mapCanvas);
+        if (!point) {
+          return;
+        }
+
+        const x = point.x;
+        const y = point.y;
         markerCounts.monument += 1;
+
+        if (isSmallOilRigMonument(monument) && mapRenderContext.oilRigIcons?.small) {
+          drawMapIconMarker(context, mapRenderContext.oilRigIcons.small, x, y, { width: 28, height: 28, stroke: '#8fe7ff' });
+          return;
+        }
+
+        if (isLargeOilRigMonument(monument) && mapRenderContext.oilRigIcons?.large) {
+          drawMapIconMarker(context, mapRenderContext.oilRigIcons.large, x, y, { width: 30, height: 30, stroke: '#8fe7ff' });
+          return;
+        }
 
         context.fillStyle = '#e6e6e6';
         context.beginPath();
@@ -4120,15 +4680,19 @@
       drawMapDebugGeometry(context, mapRenderContext);
 
       markers.forEach((marker) => {
-        if (typeof marker?.x !== 'number' || typeof marker?.y !== 'number') {
+        const point = marker?.type === 'vendingMachine' || marker?.type === 'travelingVendor'
+          ? projectStaticRawPointToCanvas(marker.x, marker.y, mapRenderContext, mapCanvas)
+          : projectMarkerToCanvasPoint(marker, mapRenderContext, mapCanvas);
+        if (!point) {
           return;
         }
 
-        const x = projectWorldToCanvasX(marker.x, mapRenderContext);
-        const y = projectWorldToCanvasY(marker.y, mapRenderContext);
+        const x = point.x;
+        const y = point.y;
         const markerType = marker.type;
-        let renderX = x;
-        let renderY = y;
+        const overlayPoint = applyMarkerOverlayProjection(x, y, markerType, mapCanvas);
+        let renderX = overlayPoint.x;
+        let renderY = overlayPoint.y;
         let markerIcon = null;
         let markerIconWidth = 0;
         let markerIconHeight = 0;
@@ -4257,6 +4821,12 @@
     const mainMapCanvas = document.getElementById('mainMapCanvas');
     const mainMapStatus = document.getElementById('mainMapStatus');
     const mainMapLegend = document.getElementById('mainMapLegend');
+    const mainMapCalibrationToolbar = document.getElementById('mainMapCalibrationToolbar');
+    const mainMapCalibrationOverlay = document.getElementById('mainMapCalibrationOverlay');
+    const mainMapCalibrationData = document.getElementById('mainMapCalibrationData');
+    const mainMapCalibrationResetButton = document.getElementById('mainMapCalibrationResetButton');
+    const mainMapCalibrationCopyButton = document.getElementById('mainMapCalibrationCopyButton');
+    const mainMapCalibrationToggleButton = document.getElementById('mainMapCalibrationToggleButton');
     const mainMapFootnote = document.getElementById('mainMapFootnote');
     const mainMapRefreshButton = document.getElementById('mainMapRefreshButton');
     const mainMapImagePromiseCache = new Map();
@@ -4265,6 +4835,7 @@
     let mainMapRequestInFlight = null;
     let mainMapLatestPayload = null;
     let mainMapRenderContext = null;
+    let mainMapCalibrationVisible = false;
 
     function getOrLoadMainMapImage(imageDataUrl) {
       if (!imageDataUrl) {
@@ -4459,9 +5030,24 @@
           return;
         }
 
-        const x = projectMapToCanvasX(monument.x, mainMapRenderContext);
-        const y = projectMapToCanvasY(monument.y, mainMapRenderContext);
+        const projectedPoint = projectStaticRawPointToCanvas(monument.x, monument.y, mainMapRenderContext, mainMapCanvas);
+        if (!projectedPoint) {
+          return;
+        }
+        const x = projectedPoint.x;
+        const y = projectedPoint.y;
         counts.monument += 1;
+
+        if (isSmallOilRigMonument(monument) && smallRigIcon) {
+          drawMapIconMarker(context, smallRigIcon, x, y, { width: 28, height: 28, stroke: '#8fe7ff' });
+          return;
+        }
+
+        if (isLargeOilRigMonument(monument) && largeRigIcon) {
+          drawMapIconMarker(context, largeRigIcon, x, y, { width: 30, height: 30, stroke: '#8fe7ff' });
+          return;
+        }
+
         context.fillStyle = '#e6e6e6';
         context.beginPath();
         context.arc(x, y, 2, 0, Math.PI * 2);
@@ -4471,66 +5057,75 @@
       // Draw grid (always visible)
       drawMainMapGrid(context, mainMapRenderContext);
 
-      // Draw markers (world-relative coords from GetMapMarkers)
+      // Draw markers using the same raw coordinate projection as monuments and vending machines.
       markers.forEach((marker) => {
-        if (typeof marker?.x !== 'number' || typeof marker?.y !== 'number') {
+        const point = marker?.type === 'vendingMachine' || marker?.type === 'travelingVendor'
+          ? projectStaticRawPointToCanvas(marker.x, marker.y, mainMapRenderContext, mainMapCanvas)
+          : projectMarkerToCanvasPoint(marker, mainMapRenderContext, mainMapCanvas);
+        if (!point) {
           return;
         }
 
-        const x = projectWorldToCanvasX(marker.x, mainMapRenderContext);
-        const y = projectWorldToCanvasY(marker.y, mainMapRenderContext);
+        const x = point.x;
+        const y = point.y;
         const markerType = marker.type;
+        const overlayPoint = applyMarkerOverlayProjection(x, y, markerType, mainMapCanvas);
+        const renderX = overlayPoint.x;
+        const renderY = overlayPoint.y;
 
         if (markerType === 'cargoShip') {
           counts.cargoShip += 1;
           if (cargoIcon) {
-            drawMapIconMarker(context, cargoIcon, x, y, { width: 36, height: 24, label: 'Cargo', stroke: '#39ff78' });
+            drawMapIconMarker(context, cargoIcon, renderX, renderY, { width: 36, height: 24, label: 'Cargo', stroke: '#39ff78' });
           } else {
             context.fillStyle = '#39ff78';
             context.beginPath();
-            context.arc(x, y, 6, 0, Math.PI * 2);
+            context.arc(renderX, renderY, 6, 0, Math.PI * 2);
             context.fill();
           }
         } else if (markerType === 'ch47') {
           counts.ch47 += 1;
           if (ch47Icon) {
-            drawMapIconMarker(context, ch47Icon, x, y, { width: 38, height: 28, label: 'CH47', stroke: '#f06f3c' });
+            drawMapIconMarker(context, ch47Icon, renderX, renderY, { width: 38, height: 28, label: 'CH47', stroke: '#f06f3c' });
           } else {
             context.fillStyle = '#f06f3c';
             context.beginPath();
-            context.arc(x, y, 6, 0, Math.PI * 2);
+            context.arc(renderX, renderY, 6, 0, Math.PI * 2);
             context.fill();
           }
         } else if (markerType === 'patrolHelicopter') {
           counts.patrolHelicopter += 1;
           if (patrolIcon) {
-            drawMapIconMarker(context, patrolIcon, x, y, { width: 34, height: 24, label: 'Heli', stroke: '#ffb08f' });
+            drawMapIconMarker(context, patrolIcon, renderX, renderY, { width: 34, height: 24, label: 'Heli', stroke: '#ffb08f' });
           } else {
             context.fillStyle = '#ffb08f';
             context.beginPath();
-            context.arc(x, y, 6, 0, Math.PI * 2);
+            context.arc(renderX, renderY, 6, 0, Math.PI * 2);
             context.fill();
           }
         } else if (markerType === 'travelingVendor') {
           counts.travelingVendor += 1;
           if (vendorIcon) {
-            drawMapIconMarker(context, vendorIcon, x, y, { width: 28, height: 28, label: 'Vendor', stroke: '#b9ffd0' });
+            drawMapIconMarker(context, vendorIcon, renderX, renderY, { width: 28, height: 28, label: 'Vendor', stroke: '#b9ffd0' });
           } else {
             context.fillStyle = '#b9ffd0';
             context.beginPath();
-            context.arc(x, y, 5, 0, Math.PI * 2);
+            context.arc(renderX, renderY, 5, 0, Math.PI * 2);
             context.fill();
           }
         } else if (markerType === 'vendingMachine') {
           counts.vendingMachine += 1;
           context.fillStyle = '#45d7ff';
           context.beginPath();
-          context.arc(x, y, 3, 0, Math.PI * 2);
+          context.arc(renderX, renderY, 3, 0, Math.PI * 2);
           context.fill();
         }
       });
 
       updateMainMapLegend(counts);
+      if (mainMapCalibrationVisible) {
+        renderMainMapCalibrationOverlay(payload);
+      }
     }
 
     async function loadMainMapData(options = {}) {
@@ -4610,6 +5205,97 @@
         loadMainMapData({ force: true });
       });
     }
+
+    if (mainMapCalibrationToggleButton) {
+      mainMapCalibrationToggleButton.addEventListener('click', () => {
+        setMainMapCalibrationVisibility(!mainMapCalibrationVisible);
+        if (mainMapCalibrationVisible) {
+          renderMainMapCalibrationOverlay(mainMapLatestPayload);
+        }
+      });
+    }
+
+    if (mainMapCalibrationResetButton) {
+      mainMapCalibrationResetButton.addEventListener('click', () => {
+        resetMainMapCalibrationPlacements();
+        renderMainMapCalibrationOverlay(mainMapLatestPayload);
+      });
+    }
+
+    if (mainMapCalibrationCopyButton) {
+      mainMapCalibrationCopyButton.addEventListener('click', async () => {
+        const payload = mainMapLatestPayload;
+        if (!payload || !navigator.clipboard) {
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(buildMainMapCalibrationData(payload), null, 2));
+          mainMapStatus.textContent = 'Calibration data copied.';
+        } catch {
+          mainMapStatus.textContent = 'Failed to copy calibration data.';
+        }
+      });
+    }
+
+    mainMapCalibrationOverlay?.addEventListener('pointerdown', (event) => {
+      if (!mainMapCalibrationVisible) {
+        return;
+      }
+
+      const chip = event.target instanceof HTMLElement ? event.target.closest('.map-calibration-chip') : null;
+      if (!(chip instanceof HTMLElement) || !mainMapCalibrationOverlay) {
+        return;
+      }
+
+      const targetId = chip.dataset.targetId;
+      if (!targetId) {
+        return;
+      }
+
+      event.preventDefault();
+      ensureMainMapCalibrationPlacementsLoaded();
+      chip.setPointerCapture(event.pointerId);
+      mainMapCalibrationDragState = {
+        pointerId: event.pointerId,
+        targetId,
+        chip
+      };
+    });
+
+    window.addEventListener('pointermove', (event) => {
+      if (!mainMapCalibrationVisible || !mainMapCalibrationDragState || !mainMapCalibrationOverlay || event.pointerId !== mainMapCalibrationDragState.pointerId) {
+        return;
+      }
+
+      const rect = mainMapCalibrationOverlay.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
+
+      const normalizedX = clampNumber((event.clientX - rect.left) / rect.width, 0, 1);
+      const normalizedY = clampNumber((event.clientY - rect.top) / rect.height, 0, 1);
+      mainMapCalibrationPlacements[mainMapCalibrationDragState.targetId] = { normalizedX, normalizedY };
+      mainMapCalibrationDragState.chip.style.left = `${normalizedX * 100}%`;
+      mainMapCalibrationDragState.chip.style.top = `${normalizedY * 100}%`;
+      updateMainMapCalibrationPanel(mainMapLatestPayload);
+    });
+
+    window.addEventListener('pointerup', (event) => {
+      if (!mainMapCalibrationVisible || !mainMapCalibrationDragState || event.pointerId !== mainMapCalibrationDragState.pointerId) {
+        return;
+      }
+
+      if (mainMapCalibrationDragState.chip.hasPointerCapture(event.pointerId)) {
+        mainMapCalibrationDragState.chip.releasePointerCapture(event.pointerId);
+      }
+
+      persistMainMapCalibrationPlacements();
+      mainMapCalibrationDragState = null;
+      renderMainMapCalibrationOverlay(mainMapLatestPayload);
+    });
+
+    setMainMapCalibrationVisibility(false);
 
     // ---- End dedicated Map tab ----
 

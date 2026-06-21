@@ -1604,12 +1604,83 @@ body.auth-locked {
   margin-bottom: 12px;
 }
 
+.map-tab-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .map-tab-refresh-button {
   flex-shrink: 0;
 }
 
+.map-tab-calibration-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.map-tab-calibration-copy {
+  margin: 0;
+  max-width: 56ch;
+}
+
+.map-tab-calibration-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.map-tab-stage {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+}
+
 .map-tab-canvas {
   max-width: 1100px;
+}
+
+.map-calibration-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.map-calibration-chip {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(14, 26, 33, 0.92);
+  color: #f8fbff;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.1;
+  cursor: grab;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  touch-action: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.map-calibration-chip:active {
+  cursor: grabbing;
+}
+
+.map-calibration-chip[data-matched="true"] {
+  border-color: rgba(113, 234, 180, 0.8);
+}
+
+.map-calibration-chip[data-matched="false"] {
+  border-color: rgba(255, 168, 168, 0.8);
 }
 
 .map-card {
@@ -1668,6 +1739,20 @@ body.auth-locked {
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.map-calibration-data {
+  min-height: 220px;
+}
+
+@media (max-width: 900px) {
+  .map-tab-calibration-toolbar {
+    flex-direction: column;
+  }
+
+  .map-tab-calibration-actions {
+    justify-content: flex-start;
+  }
 }
 
 .my-system-card {

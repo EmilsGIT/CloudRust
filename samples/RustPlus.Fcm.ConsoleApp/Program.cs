@@ -42,9 +42,11 @@ var listenerRecyclePollInterval = TimeSpan.FromMinutes(5);
 var directRustPlusRetryDelay = TimeSpan.FromMilliseconds(350);
 var infoEventsRefreshInterval = TimeSpan.FromSeconds(30);
 var infoEventsMapMetadataRefreshInterval = TimeSpan.FromMinutes(10);
+var mapMarkersRefreshInterval = TimeSpan.FromSeconds(5);
+var oilRigCrateCountdownDuration = TimeSpan.FromMinutes(14.5);
 const int directRustPlusMaxAttempts = 3;
 const int debugEventLimit = 40;
-var mapRefreshInterval = TimeSpan.FromMinutes(1);
+var mapRefreshInterval = TimeSpan.FromMinutes(2);
 var authDataDirectoryPath = Path.Combine(appRootPath, "app-data");
 var usersFilePath = Path.Combine(authDataDirectoryPath, "users.json");
 var authSessionsFilePath = Path.Combine(authDataDirectoryPath, "auth-sessions.json");
@@ -1465,6 +1467,18 @@ async Task HandleRequestAsync(HttpListenerContext context, CancellationToken can
         }
 
         await HandleMapRequestAsync(context);
+        return;
+    }
+
+    if (path.Equals("/api/map/markers", StringComparison.OrdinalIgnoreCase))
+    {
+        if (authenticatedUser is null)
+        {
+            await WriteJsonResponseAsync(context, 401, new { ok = false, message = "A signed-in user session is required." });
+            return;
+        }
+
+        await HandleMapMarkersRequestAsync(context);
         return;
     }
 
@@ -4158,14 +4172,14 @@ void InvalidateServerPairingCache(ListenerRuntime runtime)
     runtime.LatestServerPairing = null;
     runtime.MapCachePayloadBytes = null;
     runtime.MapCacheRefreshedAtUtc = DateTimeOffset.MinValue;
+    runtime.MapMarkersCachePayloadBytes = null;
+    runtime.MapMarkersCacheRefreshedAtUtc = DateTimeOffset.MinValue;
     runtime.InfoEventsPayloadBytes = null;
     runtime.InfoEventsPayloadRefreshedAtUtc = DateTimeOffset.MinValue;
     runtime.InfoEventsMapMetadata = null;
     runtime.InfoEventsMapMetadataRefreshedAtUtc = DateTimeOffset.MinValue;
     runtime.TeamStatusPayloadBytes = null;
     runtime.TeamStatusPayloadRefreshedAtUtc = DateTimeOffset.MinValue;
-    runtime.LastDeepSeaMarkerIds.Clear();
-    runtime.ActiveDeepSeaMarkerIds.Clear();
 
     try
     {
@@ -4383,7 +4397,7 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
             runtime.InfoEventsMapMetadataRefreshedAtUtc = now;
         }
 
-        var mapSize = Math.Max(mapMetadata?.MapWidth ?? 0u, mapMetadata?.MapHeight ?? 0u);
+        var mapWidth = mapMetadata?.MapWidth ?? 0u;
         var smallOilRigMonument = mapMetadata?.SmallOilRigMonument;
         var largeOilRigMonument = mapMetadata?.LargeOilRigMonument;
 
@@ -4411,26 +4425,27 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
             }
 
             var ch47Id = ch47.Id.Value;
-            var isKnownCh47 = runtime.Ch47Tracks.TryGetValue(ch47Id, out var existingTrack);
-            var spawnClassification = ClassifyCh47Trajectory(
+            runtime.Ch47Tracks.TryGetValue(ch47Id, out var existingTrack);
+            var trackState = UpdateCh47TrackState(
                 ch47.X.Value,
                 ch47.Y.Value,
                 existingTrack,
-                mapSize,
+                now,
+                mapWidth,
                 smallOilRigMonument,
                 largeOilRigMonument);
+            var spawnClassification = trackState.SpawnClassification;
 
-            if (!isKnownCh47)
+            if (spawnClassification == Ch47SpawnClassification.SmallOilRig
+                && existingTrack?.SpawnClassification != Ch47SpawnClassification.SmallOilRig)
             {
-                if (spawnClassification == Ch47SpawnClassification.SmallOilRig)
-                {
-                    smallOilRigChinookDetected = true;
-                }
+                smallOilRigChinookDetected = true;
+            }
 
-                if (spawnClassification == Ch47SpawnClassification.LargeOilRig)
-                {
-                    largeOilRigChinookDetected = true;
-                }
+            if (spawnClassification == Ch47SpawnClassification.LargeOilRig
+                && existingTrack?.SpawnClassification != Ch47SpawnClassification.LargeOilRig)
+            {
+                largeOilRigChinookDetected = true;
             }
 
             if (spawnClassification == Ch47SpawnClassification.GeneralEvent)
@@ -4438,13 +4453,7 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
                 activeGeneralCh47Ids.Add(ch47Id);
             }
 
-            runtime.Ch47Tracks[ch47Id] = new Ch47Track
-            {
-                X = ch47.X.Value,
-                Y = ch47.Y.Value,
-                ObservedAtUtc = now,
-                SpawnClassification = spawnClassification
-            };
+            runtime.Ch47Tracks[ch47Id] = trackState;
         }
 
         foreach (var trackedId in runtime.Ch47Tracks.Keys.ToArray())
@@ -4459,42 +4468,15 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
         var ch47Active = activeGeneralCh47Ids.Count > 0;
         var patrolHelicopterActive = markers.PatrolHelicopterMarkers.Count > 0;
         var vendorActive = markers.TravelingVendorMarkers.Count > 0;
-        var deepSeaCurrentMarkerIds = CollectDeepSeaMarkerIds(markers, mapMetadata?.MapWidth, mapMetadata?.MapHeight);
-        var newlyDetectedDeepSeaMarkerIds = deepSeaCurrentMarkerIds
-            .Where(markerId => !runtime.LastDeepSeaMarkerIds.Contains(markerId))
-            .ToHashSet();
-
-        if (newlyDetectedDeepSeaMarkerIds.Count >= 3)
-        {
-            runtime.ActiveDeepSeaMarkerIds.Clear();
-            foreach (var markerId in deepSeaCurrentMarkerIds)
-            {
-                runtime.ActiveDeepSeaMarkerIds.Add(markerId);
-            }
-        }
-
-        var deepSeaActive = runtime.ActiveDeepSeaMarkerIds.Count > 0
-            && runtime.ActiveDeepSeaMarkerIds.Overlaps(deepSeaCurrentMarkerIds);
-
-        if (!deepSeaActive)
-        {
-            runtime.ActiveDeepSeaMarkerIds.Clear();
-        }
-
-        runtime.LastDeepSeaMarkerIds.Clear();
-        foreach (var markerId in deepSeaCurrentMarkerIds)
-        {
-            runtime.LastDeepSeaMarkerIds.Add(markerId);
-        }
 
         if (smallOilRigChinookDetected && !runtime.InfoEventsCache.SmallOilRigCountdownEndUtc.HasValue)
         {
-            runtime.InfoEventsCache.SmallOilRigCountdownEndUtc = now.AddMinutes(15);
+            runtime.InfoEventsCache.SmallOilRigCountdownEndUtc = now.Add(oilRigCrateCountdownDuration);
         }
 
         if (largeOilRigChinookDetected && !runtime.InfoEventsCache.LargeOilRigCountdownEndUtc.HasValue)
         {
-            runtime.InfoEventsCache.LargeOilRigCountdownEndUtc = now.AddMinutes(15);
+            runtime.InfoEventsCache.LargeOilRigCountdownEndUtc = now.Add(oilRigCrateCountdownDuration);
         }
 
         if (cargoActive)
@@ -4517,11 +4499,6 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
             runtime.InfoEventsCache.TravelingVendorLastSeenUtc = now;
         }
 
-        if (deepSeaActive)
-        {
-            runtime.InfoEventsCache.DeepSeaLastSeenUtc = now;
-        }
-
         SaveInfoEventsCache(runtime.InfoEventsCachePath, runtime.InfoEventsCache);
 
         var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(new
@@ -4535,8 +4512,7 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
                 BuildInfoItem("cargoShip", "Cargoship", cargoActive, runtime.InfoEventsCache.CargoShipLastSeenUtc),
                 BuildInfoItem("chinook47", "Chinook 47 Event", ch47Active, runtime.InfoEventsCache.Ch47LastSeenUtc),
                 BuildInfoItem("patrolHelicopter", "Patrol Helicopter", patrolHelicopterActive, runtime.InfoEventsCache.PatrolHelicopterLastSeenUtc),
-                BuildInfoItem("travelingVendor", "Travelling Vendor", vendorActive, runtime.InfoEventsCache.TravelingVendorLastSeenUtc),
-                BuildInfoItem("deepSea", "The Deep Sea", deepSeaActive, runtime.InfoEventsCache.DeepSeaLastSeenUtc)
+                BuildInfoItem("travelingVendor", "Travelling Vendor", vendorActive, runtime.InfoEventsCache.TravelingVendorLastSeenUtc)
             }
         });
 
@@ -4819,34 +4795,6 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
         var debugPayload = authenticatedUser.IsAdmin
             ? BuildMapDebugPayload(map, markers, runtime.Ch47Tracks)
             : null;
-
-        var markerItems = new List<object>();
-
-        void AddMarkerRange(IEnumerable<RustPlusApi.Data.Markers.Marker> values, string type)
-        {
-            foreach (var marker in values)
-            {
-                if (!marker.X.HasValue || !marker.Y.HasValue)
-                {
-                    continue;
-                }
-
-                markerItems.Add(new
-                {
-                    id = marker.Id,
-                    type,
-                    x = marker.X.Value,
-                    y = marker.Y.Value
-                });
-            }
-        }
-
-        AddMarkerRange(markers.CargoShipMarkers.Values, "cargoShip");
-        AddMarkerRange(markers.Ch47Markers.Values, "ch47");
-        AddMarkerRange(markers.PatrolHelicopterMarkers.Values, "patrolHelicopter");
-        AddMarkerRange(markers.TravelingVendorMarkers.Values, "travelingVendor");
-        AddMarkerRange(markers.VendingMachineMarkers.Values, "vendingMachine");
-
         var refreshedAtUtc = DateTimeOffset.UtcNow;
 
         var payload = new
@@ -4865,12 +4813,13 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
                     .Where(monument => monument.X.HasValue && monument.Y.HasValue)
                     .Select(monument => new
                     {
+                        kind = GetMonumentKind(monument),
                         name = monument.Name,
                         x = monument.X!.Value,
                         y = monument.Y!.Value
                     })
             },
-            markers = markerItems,
+            markers = BuildMapMarkerItems(markers),
             debug = debugPayload
         };
 
@@ -4924,7 +4873,195 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
             {
             }
         }
+
+        rustPlus.Dispose();
     }
+}
+
+async Task HandleMapMarkersRequestAsync(HttpListenerContext context)
+{
+    var authenticatedUser = TryGetAuthenticatedUser(context.Request);
+    if (authenticatedUser is null)
+    {
+        await WriteJsonResponseAsync(context, 401, new { ok = false, message = "A signed-in user session is required." });
+        return;
+    }
+
+    var runtime = ResolveMapRuntime(authenticatedUser);
+    if (runtime is null)
+    {
+        await WriteJsonResponseAsync(context, 400, new
+        {
+            ok = false,
+            message = "A paired Rust+ session is required before map events can be loaded."
+        });
+        return;
+    }
+
+    if (!context.Request.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase))
+    {
+        context.Response.StatusCode = 405;
+        context.Response.Close();
+        return;
+    }
+
+    byte[]? cachedMapMarkersPayloadBytes = null;
+    await runtime.MapMarkersCacheGate.WaitAsync();
+    try
+    {
+        cachedMapMarkersPayloadBytes = runtime.MapMarkersCachePayloadBytes;
+        if (cachedMapMarkersPayloadBytes is { Length: > 0 }
+            && DateTimeOffset.UtcNow - runtime.MapMarkersCacheRefreshedAtUtc < mapMarkersRefreshInterval)
+        {
+            await WriteJsonResponseBytesAsync(context, 200, cachedMapMarkersPayloadBytes);
+            return;
+        }
+    }
+    finally
+    {
+        runtime.MapMarkersCacheGate.Release();
+    }
+
+    if (runtime.LatestServerPairing?.Data is null)
+    {
+        await WriteJsonResponseAsync(context, 400, new
+        {
+            ok = false,
+            message = authenticatedUser.IsAdmin
+                ? "No paired non-admin user is available yet. Pair a server in Rust+ first."
+                : "No server pairing is available yet. Pair a server in Rust+ first."
+        });
+        return;
+    }
+
+    var serverData = runtime.LatestServerPairing.Data;
+    if (!await EnsureServerReachableAsync(context, serverData.Ip, serverData.Port))
+    {
+        return;
+    }
+
+    var rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
+    var isConnected = false;
+
+    try
+    {
+        await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
+        isConnected = true;
+
+        var markersResponse = await rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout);
+        if (!markersResponse.IsSuccess || markersResponse.Data is null)
+        {
+            var errorMessage = markersResponse.Error?.Message ?? "Failed to fetch map markers.";
+            if (await TryWritePairingExpiredResponseAsync(context, runtime, errorMessage))
+            {
+                return;
+            }
+
+            await WriteJsonResponseAsync(context, 500, new
+            {
+                ok = false,
+                message = errorMessage
+            });
+            return;
+        }
+
+        var refreshedAtUtc = DateTimeOffset.UtcNow;
+        var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            ok = true,
+            refreshedAtUtc,
+            markers = BuildMapMarkerItems(markersResponse.Data)
+        });
+
+        await runtime.MapMarkersCacheGate.WaitAsync();
+        try
+        {
+            runtime.MapMarkersCachePayloadBytes = payloadBytes;
+            runtime.MapMarkersCacheRefreshedAtUtc = refreshedAtUtc;
+        }
+        finally
+        {
+            runtime.MapMarkersCacheGate.Release();
+        }
+
+        await WriteJsonResponseBytesAsync(context, 200, payloadBytes);
+    }
+    catch (TimeoutException)
+    {
+        if (cachedMapMarkersPayloadBytes is { Length: > 0 })
+        {
+            await WriteJsonResponseBytesAsync(context, 200, cachedMapMarkersPayloadBytes);
+            return;
+        }
+
+        await WriteRustPlusTimeoutAsync(context, "load map event markers");
+    }
+    catch (Exception ex)
+    {
+        if (await TryWritePairingExpiredResponseAsync(context, runtime, ex.Message))
+        {
+            return;
+        }
+
+        if (cachedMapMarkersPayloadBytes is { Length: > 0 })
+        {
+            await WriteJsonResponseBytesAsync(context, 200, cachedMapMarkersPayloadBytes);
+            return;
+        }
+
+        await WriteJsonResponseAsync(context, 500, new
+        {
+            ok = false,
+            message = ex.Message
+        });
+    }
+    finally
+    {
+        if (isConnected)
+        {
+            try
+            {
+                await rustPlus.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
+            }
+            catch
+            {
+            }
+        }
+
+        rustPlus.Dispose();
+    }
+}
+
+static List<object> BuildMapMarkerItems(RustPlusApi.Data.MapMarkers markers)
+{
+    var markerItems = new List<object>();
+
+    static void AddMarkerRange(List<object> target, IEnumerable<RustPlusApi.Data.Markers.Marker> values, string type)
+    {
+        foreach (var marker in values)
+        {
+            if (!marker.X.HasValue || !marker.Y.HasValue)
+            {
+                continue;
+            }
+
+            target.Add(new
+            {
+                id = marker.Id,
+                type,
+                x = marker.X.Value,
+                y = marker.Y.Value
+            });
+        }
+    }
+
+    AddMarkerRange(markerItems, markers.CargoShipMarkers.Values, "cargoShip");
+    AddMarkerRange(markerItems, markers.Ch47Markers.Values, "ch47");
+    AddMarkerRange(markerItems, markers.PatrolHelicopterMarkers.Values, "patrolHelicopter");
+    AddMarkerRange(markerItems, markers.TravelingVendorMarkers.Values, "travelingVendor");
+    AddMarkerRange(markerItems, markers.VendingMachineMarkers.Values, "vendingMachine");
+
+    return markerItems;
 }
 
 static object BuildMapDebugPayload(
@@ -4981,13 +5118,14 @@ static object BuildMapDebugPayload(
 
             var currentX = ch47.X!.Value;
             var currentY = ch47.Y!.Value;
-            var classification = ClassifyCh47Trajectory(
+            var classification = UpdateCh47TrackState(
                 currentX,
                 currentY,
                 previousTrack,
-                mapSize,
+                DateTimeOffset.UtcNow,
+                mapWidth,
                 smallOilRigMonument,
-                largeOilRigMonument);
+                largeOilRigMonument).SpawnClassification;
 
             var intersectsSmallOilRig = previousTrack is not null && DoesCh47FlightLineIntersectOilRig(
                 previousTrack.X,
@@ -5459,82 +5597,6 @@ static object BuildInfoItem(string key, string name, bool isActive, DateTimeOffs
     };
 }
 
-static HashSet<uint> CollectDeepSeaMarkerIds(
-    RustPlusApi.Data.MapMarkers markers,
-    uint? mapWidth,
-    uint? mapHeight)
-{
-    var width = mapWidth is > 0 ? mapWidth.Value : 0u;
-    var height = mapHeight is > 0 ? mapHeight.Value : 0u;
-    if (width == 0 || height == 0)
-    {
-        return [];
-    }
-
-    var mapSize = MathF.Min(width, height);
-    var edgeMargin = MathF.Max(120f, mapSize * 0.045f);
-    var clusterRadius = MathF.Max(170f, mapSize * 0.03f);
-    var candidates = new List<(uint MarkerId, float X, float Y, string Edge)>();
-
-    static void AddOffshoreVendingCandidates(
-        IEnumerable<RustPlusApi.Data.Markers.VendingMachineMarker> markerSet,
-        uint width,
-        uint height,
-        float edgeMargin,
-        List<(uint MarkerId, float X, float Y, string Edge)> target)
-    {
-        foreach (var marker in markerSet)
-        {
-            if (marker.Id is not uint markerId || marker.X is not float markerX || marker.Y is not float markerY)
-            {
-                continue;
-            }
-
-            if (TryGetNearestMapEdge(markerX, markerY, width, height, edgeMargin, out var nearestEdge))
-            {
-                target.Add((markerId, markerX, markerY, nearestEdge));
-            }
-        }
-    }
-
-    AddOffshoreVendingCandidates(markers.VendingMachineMarkers.Values, width, height, edgeMargin, candidates);
-
-    var bestCluster = candidates
-        .GroupBy(candidate => candidate.Edge)
-        .SelectMany(edgeGroup => edgeGroup.Select(seed => edgeGroup
-            .Where(candidate => Distance(seed.X, seed.Y, candidate.X, candidate.Y) <= clusterRadius)
-            .ToList()))
-        .OrderByDescending(cluster => cluster.Count)
-        .FirstOrDefault();
-
-    if (bestCluster is null || bestCluster.Count < 3)
-    {
-        return [];
-    }
-
-    return bestCluster.Select(candidate => candidate.MarkerId).ToHashSet();
-}
-
-static bool TryGetNearestMapEdge(float x, float y, uint mapWidth, uint mapHeight, float edgeMargin, out string nearestEdge)
-{
-    var leftDistance = x;
-    var topDistance = y;
-    var rightDistance = mapWidth - x;
-    var bottomDistance = mapHeight - y;
-
-    var edgeDistances = new (string Edge, float Distance)[]
-    {
-        ("left", leftDistance),
-        ("top", topDistance),
-        ("right", rightDistance),
-        ("bottom", bottomDistance)
-    };
-
-    var closestEdge = edgeDistances.OrderBy(entry => entry.Distance).First();
-    nearestEdge = closestEdge.Edge;
-    return closestEdge.Distance <= edgeMargin;
-}
-
 static string FormatSince(DateTimeOffset? lastSeenUtc, bool isActive)
 {
     if (isActive)
@@ -5576,9 +5638,25 @@ static bool IsSmallOilRigMonument(RustPlusApi.Data.ServerMapMonument monument)
     var name = monument.Name.Trim().ToLowerInvariant();
 
     return name.Contains("small oil")
+            || name.Contains("oil_rig_small")
            || name.Contains("oil rig small")
            || name.Contains("oilrigsmall")
            || name.Contains("oilrig_1");
+}
+
+static string? GetMonumentKind(RustPlusApi.Data.ServerMapMonument monument)
+{
+    if (IsSmallOilRigMonument(monument))
+    {
+        return "smallOilRig";
+    }
+
+    if (IsLargeOilRigMonument(monument))
+    {
+        return "largeOilRig";
+    }
+
+    return null;
 }
 
 static bool IsLargeOilRigMonument(RustPlusApi.Data.ServerMapMonument monument)
@@ -5591,6 +5669,7 @@ static bool IsLargeOilRigMonument(RustPlusApi.Data.ServerMapMonument monument)
     var name = monument.Name.Trim().ToLowerInvariant();
 
     return name.Contains("large oil")
+            || name.Contains("large_oil_rig")
            || name.Contains("oil rig large")
            || name.Contains("oilriglarge")
            || name.Contains("oilrig_2");
@@ -5670,45 +5749,29 @@ static bool DoesCh47FlightLineIntersectOilRig(
     return lineDistance <= monumentRadius;
 }
 
-static Ch47SpawnClassification ClassifyCh47Trajectory(
+static Ch47Track UpdateCh47TrackState(
     float currentX,
     float currentY,
     Ch47Track? previousTrack,
-    uint mapSize,
+    DateTimeOffset observedAtUtc,
+    uint mapWidth,
     RustPlusApi.Data.ServerMapMonument? smallOilRigMonument,
     RustPlusApi.Data.ServerMapMonument? largeOilRigMonument)
 {
-    const float oilRigActivationDistanceRatio = 0.20f;
-    const float oilRigIntersectionRadiusRatio = 0.03f;
-    const float minimumMovementDistanceRatio = 0.0025f;
+    const float oilRigProximityRatio = 0.15f;
+    var maxSpawnAge = TimeSpan.FromMinutes(2);
 
-    var effectiveMapSize = mapSize > 0 ? mapSize : 4500u;
-    var oilRigActivationDistance = effectiveMapSize * oilRigActivationDistanceRatio;
-    var oilRigIntersectionRadius = MathF.Max(90f, effectiveMapSize * oilRigIntersectionRadiusRatio);
-    var minimumMovementDistance = MathF.Max(20f, effectiveMapSize * minimumMovementDistanceRatio);
+    var effectiveMapWidth = mapWidth > 0 ? mapWidth : 4500u;
+    var oilRigProximityDistance = effectiveMapWidth * oilRigProximityRatio;
+    var firstObservedAtUtc = previousTrack?.FirstObservedAtUtc ?? observedAtUtc;
+    var isNearSmallOilRig = IsWithinOilRigActivationDistance(currentX, currentY, smallOilRigMonument, oilRigProximityDistance);
+    var isNearLargeOilRig = IsWithinOilRigActivationDistance(currentX, currentY, largeOilRigMonument, oilRigProximityDistance);
 
-    if (previousTrack is not null)
+    if (isNearSmallOilRig || isNearLargeOilRig)
     {
-        var intersectsSmallOilRig = DoesCh47FlightLineIntersectOilRig(
-            previousTrack.X,
-            previousTrack.Y,
-            currentX,
-            currentY,
-            smallOilRigMonument,
-            oilRigActivationDistance,
-            oilRigIntersectionRadius,
-            minimumMovementDistance);
-        var intersectsLargeOilRig = DoesCh47FlightLineIntersectOilRig(
-            previousTrack.X,
-            previousTrack.Y,
-            currentX,
-            currentY,
-            largeOilRigMonument,
-            oilRigActivationDistance,
-            oilRigIntersectionRadius,
-            minimumMovementDistance);
+        var oilRigClassification = Ch47SpawnClassification.SmallOilRig;
 
-        if (intersectsSmallOilRig && intersectsLargeOilRig)
+        if (isNearSmallOilRig && isNearLargeOilRig)
         {
             var smallOilRigDistance = smallOilRigMonument?.X is not null && smallOilRigMonument.Y is not null
                 ? Distance(currentX, currentY, smallOilRigMonument.X.Value, smallOilRigMonument.Y.Value)
@@ -5716,32 +5779,112 @@ static Ch47SpawnClassification ClassifyCh47Trajectory(
             var largeOilRigDistance = largeOilRigMonument?.X is not null && largeOilRigMonument.Y is not null
                 ? Distance(currentX, currentY, largeOilRigMonument.X.Value, largeOilRigMonument.Y.Value)
                 : float.MaxValue;
-            return smallOilRigDistance <= largeOilRigDistance
+
+            oilRigClassification = smallOilRigDistance <= largeOilRigDistance
                 ? Ch47SpawnClassification.SmallOilRig
                 : Ch47SpawnClassification.LargeOilRig;
         }
-
-        if (intersectsSmallOilRig)
+        else if (isNearLargeOilRig)
         {
-            return Ch47SpawnClassification.SmallOilRig;
+            oilRigClassification = Ch47SpawnClassification.LargeOilRig;
         }
 
-        if (intersectsLargeOilRig)
+        return new Ch47Track
         {
-            return Ch47SpawnClassification.LargeOilRig;
-        }
+            X = currentX,
+            Y = currentY,
+            ObservedAtUtc = observedAtUtc,
+            FirstObservedAtUtc = firstObservedAtUtc,
+            OilRigProximityEnteredAtUtc = previousTrack?.OilRigProximityEnteredAtUtc ?? observedAtUtc,
+            SpawnClassification = oilRigClassification
+        };
+    }
 
-        if (previousTrack.SpawnClassification == Ch47SpawnClassification.SmallOilRig
-            && IsWithinOilRigActivationDistance(currentX, currentY, smallOilRigMonument, oilRigActivationDistance))
-        {
-            return Ch47SpawnClassification.SmallOilRig;
-        }
+    var spawnClassification = previousTrack?.SpawnClassification ?? GetInitialCh47SpawnClassification(
+        currentX,
+        currentY,
+        oilRigProximityDistance,
+        smallOilRigMonument,
+        largeOilRigMonument);
 
-        if (previousTrack.SpawnClassification == Ch47SpawnClassification.LargeOilRig
-            && IsWithinOilRigActivationDistance(currentX, currentY, largeOilRigMonument, oilRigActivationDistance))
+    if (spawnClassification == Ch47SpawnClassification.SmallOilRig
+        || spawnClassification == Ch47SpawnClassification.LargeOilRig)
+    {
+        return new Ch47Track
         {
-            return Ch47SpawnClassification.LargeOilRig;
-        }
+            X = currentX,
+            Y = currentY,
+            ObservedAtUtc = observedAtUtc,
+            FirstObservedAtUtc = firstObservedAtUtc,
+            OilRigProximityEnteredAtUtc = previousTrack?.OilRigProximityEnteredAtUtc,
+            SpawnClassification = spawnClassification
+        };
+    }
+
+    var spawnAge = observedAtUtc - firstObservedAtUtc;
+    if (spawnAge > maxSpawnAge)
+    {
+        return new Ch47Track
+        {
+            X = currentX,
+            Y = currentY,
+            ObservedAtUtc = observedAtUtc,
+            FirstObservedAtUtc = firstObservedAtUtc,
+            SpawnClassification = Ch47SpawnClassification.GeneralEvent
+        };
+    }
+
+    var targetMonument = spawnClassification == Ch47SpawnClassification.PendingSmallOilRig
+        ? smallOilRigMonument
+        : largeOilRigMonument;
+    var isWithinProximity = IsWithinOilRigActivationDistance(currentX, currentY, targetMonument, oilRigProximityDistance);
+    DateTimeOffset? proximityEnteredAtUtc = isWithinProximity
+        ? previousTrack?.OilRigProximityEnteredAtUtc ?? firstObservedAtUtc
+        : null;
+
+    return new Ch47Track
+    {
+        X = currentX,
+        Y = currentY,
+        ObservedAtUtc = observedAtUtc,
+        FirstObservedAtUtc = firstObservedAtUtc,
+        OilRigProximityEnteredAtUtc = proximityEnteredAtUtc,
+        SpawnClassification = spawnClassification
+    };
+}
+
+static Ch47SpawnClassification GetInitialCh47SpawnClassification(
+    float spawnX,
+    float spawnY,
+    float oilRigProximityDistance,
+    RustPlusApi.Data.ServerMapMonument? smallOilRigMonument,
+    RustPlusApi.Data.ServerMapMonument? largeOilRigMonument)
+{
+    var isNearSmallOilRig = IsWithinOilRigActivationDistance(spawnX, spawnY, smallOilRigMonument, oilRigProximityDistance);
+    var isNearLargeOilRig = IsWithinOilRigActivationDistance(spawnX, spawnY, largeOilRigMonument, oilRigProximityDistance);
+
+    if (isNearSmallOilRig && isNearLargeOilRig)
+    {
+        var smallOilRigDistance = smallOilRigMonument?.X is not null && smallOilRigMonument.Y is not null
+            ? Distance(spawnX, spawnY, smallOilRigMonument.X.Value, smallOilRigMonument.Y.Value)
+            : float.MaxValue;
+        var largeOilRigDistance = largeOilRigMonument?.X is not null && largeOilRigMonument.Y is not null
+            ? Distance(spawnX, spawnY, largeOilRigMonument.X.Value, largeOilRigMonument.Y.Value)
+            : float.MaxValue;
+
+        return smallOilRigDistance <= largeOilRigDistance
+            ? Ch47SpawnClassification.PendingSmallOilRig
+            : Ch47SpawnClassification.PendingLargeOilRig;
+    }
+
+    if (isNearSmallOilRig)
+    {
+        return Ch47SpawnClassification.PendingSmallOilRig;
+    }
+
+    if (isNearLargeOilRig)
+    {
+        return Ch47SpawnClassification.PendingLargeOilRig;
     }
 
     return Ch47SpawnClassification.GeneralEvent;
@@ -6270,7 +6413,6 @@ file sealed class InfoEventsCache
     public DateTimeOffset? Ch47LastSeenUtc { get; set; }
     public DateTimeOffset? PatrolHelicopterLastSeenUtc { get; set; }
     public DateTimeOffset? TravelingVendorLastSeenUtc { get; set; }
-    public DateTimeOffset? DeepSeaLastSeenUtc { get; set; }
     public DateTimeOffset? SmallOilRigLastEventUtc { get; set; }
     public DateTimeOffset? SmallOilRigCountdownEndUtc { get; set; }
     public DateTimeOffset? LargeOilRigLastEventUtc { get; set; }
@@ -6282,6 +6424,8 @@ file sealed class Ch47Track
     public float X { get; set; }
     public float Y { get; set; }
     public DateTimeOffset ObservedAtUtc { get; set; }
+    public DateTimeOffset FirstObservedAtUtc { get; set; }
+    public DateTimeOffset? OilRigProximityEnteredAtUtc { get; set; }
     public Ch47SpawnClassification SpawnClassification { get; set; }
 }
 
@@ -6317,8 +6461,6 @@ file sealed class ListenerRuntime
     public LatestEntityPairingState? LatestStorageMonitorPairing { get; set; }
     public InfoEventsCache InfoEventsCache { get; set; } = new();
     public ConcurrentDictionary<uint, Ch47Track> Ch47Tracks { get; } = new();
-    public HashSet<uint> LastDeepSeaMarkerIds { get; } = [];
-    public HashSet<uint> ActiveDeepSeaMarkerIds { get; } = [];
     public SemaphoreSlim InfoEventsGate { get; } = new(1, 1);
     public DateTimeOffset InfoEventsPayloadRefreshedAtUtc { get; set; } = DateTimeOffset.MinValue;
     public byte[]? InfoEventsPayloadBytes { get; set; }
@@ -6330,6 +6472,9 @@ file sealed class ListenerRuntime
     public SemaphoreSlim MapCacheGate { get; } = new(1, 1);
     public DateTimeOffset MapCacheRefreshedAtUtc { get; set; } = DateTimeOffset.MinValue;
     public byte[]? MapCachePayloadBytes { get; set; }
+    public SemaphoreSlim MapMarkersCacheGate { get; } = new(1, 1);
+    public DateTimeOffset MapMarkersCacheRefreshedAtUtc { get; set; } = DateTimeOffset.MinValue;
+    public byte[]? MapMarkersCachePayloadBytes { get; set; }
     public Process? SteamLoginProcess { get; set; }
     public bool SteamLoginIsRunning { get; set; }
     public string SteamLoginStatus { get; set; } = "idle";
@@ -6427,6 +6572,8 @@ file sealed class ServerPairingCacheRecord
 file enum Ch47SpawnClassification
 {
     GeneralEvent,
+    PendingSmallOilRig,
+    PendingLargeOilRig,
     SmallOilRig,
     LargeOilRig
 }
