@@ -29,7 +29,7 @@ var setupHelpPicsFolderPath = FindDirectoryUpwards(Directory.GetCurrentDirectory
                           ?? FindDirectoryUpwards(AppContext.BaseDirectory, "SetupHelpPics")
                           ?? Path.Combine(appRootPath, "SetupHelpPics");
 var itemIconsFolderPath = Path.Combine(appRootPath, "resources", "items");
-var itemIconIndex = LoadItemIconIndex(itemIconsFolderPath);
+var itemIconIndexCache = new ItemIconIndexCache(itemIconsFolderPath, LoadItemIconIndex);
 var httpCancellationTokenSource = new CancellationTokenSource();
 var rustPlusReachabilityTimeout = TimeSpan.FromSeconds(4);
 var rustPlusConnectTimeout = TimeSpan.FromSeconds(8);
@@ -5257,6 +5257,7 @@ async Task HandleMonitorItemsRequestAsync(HttpListenerContext context)
             emptySnapshotConfirmed = !(monitorData.Items?.Any() ?? false);
         }
 
+        var itemIconIndex = itemIconIndexCache.GetSnapshot();
         var items = (monitorData.Items ?? Enumerable.Empty<RustPlusApi.Data.Entities.StorageMonitorItemInfo>())
             .Select(item => new
             {
@@ -6406,6 +6407,74 @@ file sealed class BackgroundImageMetadata
 }
 
 file sealed record ItemIconMetadata(string ShortName, string IconUrl);
+
+file sealed class ItemIconIndexCache
+{
+    private readonly string _itemIconsFolderPath;
+    private readonly Func<string, IReadOnlyDictionary<int, ItemIconMetadata>> _loadIndex;
+    private readonly object _gate = new();
+    private IReadOnlyDictionary<int, ItemIconMetadata> _snapshot;
+    private ItemIconFolderVersion _version;
+
+    public ItemIconIndexCache(string itemIconsFolderPath, Func<string, IReadOnlyDictionary<int, ItemIconMetadata>> loadIndex)
+    {
+        _itemIconsFolderPath = itemIconsFolderPath;
+        _loadIndex = loadIndex;
+        _snapshot = loadIndex(itemIconsFolderPath);
+        _version = ItemIconFolderVersion.Create(itemIconsFolderPath);
+    }
+
+    public IReadOnlyDictionary<int, ItemIconMetadata> GetSnapshot()
+    {
+        var currentVersion = ItemIconFolderVersion.Create(_itemIconsFolderPath);
+        if (currentVersion.Equals(_version))
+        {
+            return _snapshot;
+        }
+
+        lock (_gate)
+        {
+            currentVersion = ItemIconFolderVersion.Create(_itemIconsFolderPath);
+            if (currentVersion.Equals(_version))
+            {
+                return _snapshot;
+            }
+
+            _snapshot = _loadIndex(_itemIconsFolderPath);
+            _version = currentVersion;
+            return _snapshot;
+        }
+    }
+}
+
+file readonly record struct ItemIconFolderVersion(int JsonCount, int PngCount, long LatestWriteTicks)
+{
+    public static ItemIconFolderVersion Create(string itemIconsFolderPath)
+    {
+        if (!Directory.Exists(itemIconsFolderPath))
+        {
+            return default;
+        }
+
+        var jsonCount = 0;
+        var pngCount = 0;
+        long latestWriteTicks = 0;
+
+        foreach (var filePath in Directory.EnumerateFiles(itemIconsFolderPath, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            jsonCount++;
+            latestWriteTicks = Math.Max(latestWriteTicks, File.GetLastWriteTimeUtc(filePath).Ticks);
+        }
+
+        foreach (var filePath in Directory.EnumerateFiles(itemIconsFolderPath, "*.png", SearchOption.TopDirectoryOnly))
+        {
+            pngCount++;
+            latestWriteTicks = Math.Max(latestWriteTicks, File.GetLastWriteTimeUtc(filePath).Ticks);
+        }
+
+        return new ItemIconFolderVersion(jsonCount, pngCount, latestWriteTicks);
+    }
+}
 
 file sealed class InfoEventsCache
 {
