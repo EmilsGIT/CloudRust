@@ -1573,6 +1573,36 @@ async Task HandleSseAsync(HttpListenerContext context, CancellationToken cancell
         await writer.WriteLineAsync("data: {\"ok\":true}");
         await writer.WriteLineAsync();
 
+        if (runtime.LatestSmartSwitchPairing is { EntityId: not null } smartSwitchPairing)
+        {
+            await writer.WriteLineAsync("event: smart-switch-pairing");
+            await writer.WriteLineAsync($"data: {JsonSerializer.Serialize(new
+            {
+                type = "smart-switch-pairing",
+                entityId = smartSwitchPairing.EntityId,
+                observedAtUtc = smartSwitchPairing.ObservedAtUtc,
+                playerId = smartSwitchPairing.PlayerId,
+                serverId = smartSwitchPairing.ServerId
+            })}");
+            await writer.WriteLineAsync();
+        }
+
+        if (runtime.LatestStorageMonitorPairing is { EntityId: not null } storageMonitorPairing)
+        {
+            await writer.WriteLineAsync("event: storage-monitor-pairing");
+            await writer.WriteLineAsync($"data: {JsonSerializer.Serialize(new
+            {
+                type = "storage-monitor-pairing",
+                entityId = storageMonitorPairing.EntityId,
+                observedAtUtc = storageMonitorPairing.ObservedAtUtc,
+                playerId = storageMonitorPairing.PlayerId,
+                serverId = storageMonitorPairing.ServerId
+            })}");
+            await writer.WriteLineAsync();
+        }
+
+        await writer.FlushAsync(cancellationToken);
+
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
