@@ -4589,8 +4589,11 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
     var authenticatedUser = TryGetAuthenticatedUser(context.Request);
     if (authenticatedUser is null || authenticatedUser.IsAdmin)
     {
-        context.Response.StatusCode = 401;
-        context.Response.Close();
+        await WriteJsonResponseAsync(context, 401, new
+        {
+            ok = false,
+            message = "A signed-in user session is required."
+        });
         return;
     }
 
