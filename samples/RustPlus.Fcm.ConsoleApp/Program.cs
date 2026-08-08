@@ -42,9 +42,9 @@ var listenerRecyclePollInterval = TimeSpan.FromMinutes(5);
 var directRustPlusRetryDelay = TimeSpan.FromMilliseconds(350);
 var infoEventsRefreshInterval = TimeSpan.FromSeconds(30);
 var infoEventsMapMetadataRefreshInterval = TimeSpan.FromMinutes(10);
-var mapMarkersRefreshInterval = TimeSpan.FromSeconds(5);
+var mapMarkersRefreshInterval = TimeSpan.FromSeconds(30);
 var oilRigCrateCountdownDuration = TimeSpan.FromMinutes(14.5);
-const int directRustPlusMaxAttempts = 3;
+const int directRustPlusMaxAttempts = 2;
 const int debugEventLimit = 40;
 var mapRefreshInterval = TimeSpan.FromMinutes(2);
 var authDataDirectoryPath = Path.Combine(appRootPath, "app-data");
@@ -4266,7 +4266,8 @@ async Task<bool> TryWritePairingExpiredResponseAsync(HttpListenerContext context
 async Task<T> ExecuteDirectRustPlusRequestAsync<T>(
     ListenerRuntime runtime,
     Func<RustPlusApi.RustPlus, Task<T>> operation,
-    Func<T, (bool IsSuccess, string? ErrorMessage)> evaluateResult)
+    Func<T, (bool IsSuccess, string? ErrorMessage)> evaluateResult,
+    double requestTokenCost = 1)
 {
     if (runtime.LatestServerPairing?.Data is null)
     {
@@ -4296,6 +4297,7 @@ async Task<T> ExecuteDirectRustPlusRequestAsync<T>(
                 await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
                 isConnected = true;
 
+                await runtime.PlayerRequestRateLimiter.AcquireAsync(requestTokenCost);
                 var result = await operation(rustPlus);
                 var evaluation = evaluateResult(result);
                 if (evaluation.IsSuccess)
@@ -4740,16 +4742,17 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
         return;
     }
 
-    var rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
-    var isConnected = false;
-
     try
     {
-        await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
-        isConnected = true;
-
-        var mapResponse = await rustPlus.GetMapAsync().WaitAsync(rustPlusMapRequestTimeout);
-        var markersResponse = await rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout);
+        var mapResponse = await ExecuteDirectRustPlusRequestAsync(
+            runtime,
+            rustPlus => rustPlus.GetMapAsync().WaitAsync(rustPlusMapRequestTimeout),
+            response => (response.IsSuccess && response.Data is not null, response.Error?.Message ?? "Failed to fetch map."),
+            requestTokenCost: 5);
+        var markersResponse = await ExecuteDirectRustPlusRequestAsync(
+            runtime,
+            rustPlus => rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout),
+            response => (response.IsSuccess && response.Data is not null, response.Error?.Message ?? "Failed to fetch map markers."));
 
         if (!mapResponse.IsSuccess || mapResponse.Data is null)
         {
@@ -4854,21 +4857,6 @@ async Task HandleMapRequestAsync(HttpListenerContext context)
             message = ex.Message
         });
     }
-    finally
-    {
-        if (isConnected)
-        {
-            try
-            {
-                await rustPlus.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
-            }
-            catch
-            {
-            }
-        }
-
-        rustPlus.Dispose();
-    }
 }
 
 async Task HandleMapMarkersRequestAsync(HttpListenerContext context)
@@ -4933,15 +4921,12 @@ async Task HandleMapMarkersRequestAsync(HttpListenerContext context)
         return;
     }
 
-    var rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
-    var isConnected = false;
-
     try
     {
-        await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
-        isConnected = true;
-
-        var markersResponse = await rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout);
+        var markersResponse = await ExecuteDirectRustPlusRequestAsync(
+            runtime,
+            rustPlus => rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout),
+            response => (response.IsSuccess && response.Data is not null, response.Error?.Message ?? "Failed to fetch map markers."));
         if (!markersResponse.IsSuccess || markersResponse.Data is null)
         {
             var errorMessage = markersResponse.Error?.Message ?? "Failed to fetch map markers.";
@@ -5007,21 +4992,6 @@ async Task HandleMapMarkersRequestAsync(HttpListenerContext context)
             ok = false,
             message = ex.Message
         });
-    }
-    finally
-    {
-        if (isConnected)
-        {
-            try
-            {
-                await rustPlus.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
-            }
-            catch
-            {
-            }
-        }
-
-        rustPlus.Dispose();
     }
 }
 
@@ -5341,16 +5311,19 @@ async Task HandleMissileSiloUnknownMarkersRequestAsync(HttpListenerContext conte
     var rustPlusConnected = false;
     var legacyConnected = false;
 
+    await runtime.DirectRequestGate.WaitAsync();
     try
     {
         await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
         rustPlusConnected = true;
+        await runtime.PlayerRequestRateLimiter.AcquireAsync(5);
         var mapResponse = await rustPlus.GetMapAsync().WaitAsync(rustPlusRequestTimeout);
         await rustPlus.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
         rustPlusConnected = false;
 
         await legacy.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
         legacyConnected = true;
+        await runtime.PlayerRequestRateLimiter.AcquireAsync(1);
         var markersResponse = await legacy.GetMapMarkersLegacyAsync().WaitAsync(rustPlusRequestTimeout);
         await legacy.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
         legacyConnected = false;
@@ -5476,6 +5449,8 @@ async Task HandleMissileSiloUnknownMarkersRequestAsync(HttpListenerContext conte
             {
             }
         }
+
+        runtime.DirectRequestGate.Release();
     }
 }
 
@@ -6523,6 +6498,7 @@ file sealed class ListenerRuntime
     public CancellationTokenSource ListenerReconnectCancellationTokenSource { get; set; } = new();
     public SemaphoreSlim ListenerReconnectGate { get; } = new(1, 1);
     public SemaphoreSlim DirectRequestGate { get; } = new(1, 1);
+    public RustPlusPlayerRequestRateLimiter PlayerRequestRateLimiter { get; } = new();
     public ConcurrentQueue<object> DebugEvents { get; } = new();
     public ConcurrentDictionary<Guid, StreamWriter> SseClients { get; } = new();
     public Notification<ServerEvent?>? LatestServerPairing { get; set; }
