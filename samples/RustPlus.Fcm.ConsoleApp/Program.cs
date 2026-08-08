@@ -253,6 +253,19 @@ void ConfigureListenerRuntime(ListenerRuntime runtime, Credentials credentials)
         Console.WriteLine($"[ERROR:{runtime.UserId}]: {error}");
     };
 
+    listener.DataMessageReceived += (_, message) =>
+    {
+        runtime.LastFcmDataMessageAtUtc = DateTimeOffset.UtcNow;
+        var appDataKeys = message.AppDatas?.Select(item => item.Key).OrderBy(key => key).ToArray() ?? Array.Empty<string>();
+        TrackDebugEvent(runtime, "fcm-data-message", new
+        {
+            hasAppData = appDataKeys.Length > 0,
+            hasChannelId = appDataKeys.Contains("channelId", StringComparer.Ordinal),
+            hasBody = appDataKeys.Contains("body", StringComparer.Ordinal),
+            appDataKeys
+        });
+    };
+
     listener.Disconnecting += (_, _) =>
     {
         runtime.ListenerConnected = false;
@@ -1653,6 +1666,8 @@ async Task HandlePairingStatusRequestAsync(HttpListenerContext context, UserAcco
         ok = true,
         hasConfig = !string.IsNullOrWhiteSpace(state.ListenerConfigJson),
         listenerConnected = runtime.ListenerConnected,
+        listenerConfiguredAtUtc = runtime.ListenerConfiguredAtUtc,
+        lastFcmDataMessageAtUtc = runtime.LastFcmDataMessageAtUtc,
         steamLogin = new
         {
             isRunning = runtime.SteamLoginIsRunning,
@@ -2965,6 +2980,12 @@ async Task HandleSwitchStateRequestAsync(HttpListenerContext context)
             return;
         }
 
+        if (runtime.InfoEventsPayloadBytes is { Length: > 0 })
+        {
+            await WriteJsonResponseBytesAsync(context, 200, runtime.InfoEventsPayloadBytes);
+            return;
+        }
+
         await WriteJsonResponseAsync(context, 500, new
         {
             ok = false,
@@ -4076,9 +4097,12 @@ static string[] GetWebPrefixes()
 
 static string? NormalizeOptionalBaseUrl(string? value)
 {
-    return string.IsNullOrWhiteSpace(value)
+    var normalizedValue = value?.Trim();
+    return string.IsNullOrWhiteSpace(normalizedValue)
+        || string.Equals(normalizedValue, "local", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(normalizedValue, "disabled", StringComparison.OrdinalIgnoreCase)
         ? null
-        : value.Trim().TrimEnd('/');
+        : normalizedValue.TrimEnd('/');
 }
 
 static bool TryNormalizeEmail(string? email, out string normalizedEmail)
@@ -4342,9 +4366,6 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
         return;
     }
 
-    RustPlusApi.RustPlus? rustPlus = null;
-    var isConnected = false;
-
     await runtime.InfoEventsGate.WaitAsync();
     try
     {
@@ -4366,58 +4387,24 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
             return;
         }
 
-        var serverData = runtime.LatestServerPairing.Data;
-        if (!await EnsureServerReachableAsync(context, serverData.Ip, serverData.Port))
-        {
-            return;
-        }
+        var markersResponse = await ExecuteDirectRustPlusRequestAsync(
+            runtime,
+            rustPlus => rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout),
+            response => (response.IsSuccess && response.Data is not null, response.Error?.Message ?? "Failed to fetch map markers."));
 
-        rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
-        await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
-        isConnected = true;
-        var markersResponse = await rustPlus.GetMapMarkersAsync().WaitAsync(rustPlusRequestTimeout);
-
-        if (!markersResponse.IsSuccess || markersResponse.Data is null)
-        {
-            var errorMessage = markersResponse.Error?.Message ?? "Failed to fetch map markers.";
-            if (await TryWritePairingExpiredResponseAsync(context, runtime, errorMessage))
-            {
-                return;
-            }
-
-            await WriteJsonResponseAsync(context, 500, new
-            {
-                ok = false,
-                message = errorMessage
-            });
-            return;
-        }
-
-        var markers = markersResponse.Data;
+        var markers = markersResponse.Data!;
         var now = DateTimeOffset.UtcNow;
         var mapMetadata = runtime.InfoEventsMapMetadata;
         if (mapMetadata is null || now - runtime.InfoEventsMapMetadataRefreshedAtUtc >= infoEventsMapMetadataRefreshInterval)
         {
-            var mapResponse = await rustPlus.GetMapAsync().WaitAsync(rustPlusRequestTimeout);
-            if (!mapResponse.IsSuccess || mapResponse.Data is null)
-            {
-                var errorMessage = mapResponse.Error?.Message ?? "Failed to fetch map.";
-                if (await TryWritePairingExpiredResponseAsync(context, runtime, errorMessage))
-                {
-                    return;
-                }
-
-                await WriteJsonResponseAsync(context, 500, new
-                {
-                    ok = false,
-                    message = errorMessage
-                });
-                return;
-            }
+            var mapResponse = await ExecuteDirectRustPlusRequestAsync(
+                runtime,
+                rustPlus => rustPlus.GetMapAsync().WaitAsync(rustPlusRequestTimeout),
+                response => (response.IsSuccess && response.Data is not null, response.Error?.Message ?? "Failed to fetch map."));
 
             mapMetadata = new InfoEventsMapMetadata
             {
-                MapWidth = mapResponse.Data.Width ?? 0u,
+                MapWidth = mapResponse.Data!.Width ?? 0u,
                 MapHeight = mapResponse.Data.Height ?? 0u,
                 SmallOilRigMonument = mapResponse.Data.Monuments?.FirstOrDefault(IsSmallOilRigMonument),
                 LargeOilRigMonument = mapResponse.Data.Monuments?.FirstOrDefault(IsLargeOilRigMonument)
@@ -4553,12 +4540,24 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
     }
     catch (TimeoutException)
     {
+        if (runtime.InfoEventsPayloadBytes is { Length: > 0 })
+        {
+            await WriteJsonResponseBytesAsync(context, 200, runtime.InfoEventsPayloadBytes);
+            return;
+        }
+
         await WriteRustPlusTimeoutAsync(context, "load info events");
     }
     catch (Exception ex)
     {
         if (await TryWritePairingExpiredResponseAsync(context, runtime, ex.Message))
         {
+            return;
+        }
+
+        if (runtime.TeamStatusPayloadBytes is { Length: > 0 })
+        {
+            await WriteJsonResponseBytesAsync(context, 200, runtime.TeamStatusPayloadBytes);
             return;
         }
 
@@ -4571,16 +4570,6 @@ async Task HandleInfoEventsRequestAsync(HttpListenerContext context)
     finally
     {
         runtime.InfoEventsGate.Release();
-        if (isConnected)
-        {
-            try
-            {
-                await rustPlus!.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
-            }
-            catch
-            {
-            }
-        }
     }
 }
 
@@ -4606,9 +4595,6 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
         return;
     }
 
-    RustPlusApi.RustPlus? rustPlus = null;
-    var isConnected = false;
-
     await runtime.TeamStatusGate.WaitAsync();
     try
     {
@@ -4630,34 +4616,12 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
             return;
         }
 
-        var serverData = runtime.LatestServerPairing.Data;
-        if (!await EnsureServerReachableAsync(context, serverData.Ip, serverData.Port))
-        {
-            return;
-        }
+        var teamResponse = await ExecuteDirectRustPlusRequestAsync(
+            runtime,
+            rustPlus => rustPlus.GetTeamInfoAsync().WaitAsync(rustPlusRequestTimeout),
+            response => (response.IsSuccess && response.Data is not null, response.Error?.Message ?? "Failed to fetch team info."));
 
-        rustPlus = new RustPlusApi.RustPlus(serverData.Ip, serverData.Port, runtime.LatestServerPairing.PlayerId, runtime.LatestServerPairing.PlayerToken);
-        await rustPlus.ConnectAsync().WaitAsync(rustPlusConnectTimeout);
-        isConnected = true;
-        var teamResponse = await rustPlus.GetTeamInfoAsync().WaitAsync(rustPlusRequestTimeout);
-
-        if (!teamResponse.IsSuccess || teamResponse.Data is null)
-        {
-            var errorMessage = teamResponse.Error?.Message ?? "Failed to fetch team info.";
-            if (await TryWritePairingExpiredResponseAsync(context, runtime, errorMessage))
-            {
-                return;
-            }
-
-            await WriteJsonResponseAsync(context, 500, new
-            {
-                ok = false,
-                message = errorMessage
-            });
-            return;
-        }
-
-        var members = (teamResponse.Data.Members ?? Enumerable.Empty<RustPlusApi.Data.MemberInfo>())
+        var members = (teamResponse.Data!.Members ?? Enumerable.Empty<RustPlusApi.Data.MemberInfo>())
             .OrderByDescending(member => member.IsOnline)
             .ThenBy(member => member.Name)
             .Select(member => new
@@ -4684,6 +4648,12 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
     }
     catch (TimeoutException)
     {
+        if (runtime.TeamStatusPayloadBytes is { Length: > 0 })
+        {
+            await WriteJsonResponseBytesAsync(context, 200, runtime.TeamStatusPayloadBytes);
+            return;
+        }
+
         await WriteRustPlusTimeoutAsync(context, "load team status");
     }
     catch (Exception ex)
@@ -4702,16 +4672,6 @@ async Task HandleTeamStatusRequestAsync(HttpListenerContext context)
     finally
     {
         runtime.TeamStatusGate.Release();
-        if (isConnected)
-        {
-            try
-            {
-                await rustPlus!.DisconnectAsync().WaitAsync(rustPlusDisconnectTimeout);
-            }
-            catch
-            {
-            }
-        }
     }
 }
 
@@ -6159,6 +6119,12 @@ static string? ResolveItemIconFileName(string shortName, string fallbackPngFileN
         return null;
     }
 
+    if (string.Equals(shortName, "vehicle.module", StringComparison.OrdinalIgnoreCase))
+    {
+        return availablePngFileNames.FirstOrDefault(static candidate =>
+            string.Equals(candidate, "2module car chassis.png", StringComparison.OrdinalIgnoreCase));
+    }
+
     foreach (var candidate in availablePngFileNames)
     {
         if (string.Equals(candidate, $"{shortName}.png", StringComparison.OrdinalIgnoreCase))
@@ -6552,6 +6518,7 @@ file sealed class ListenerRuntime
     public RustPlusFcm? Listener { get; set; }
     public bool ListenerConnected { get; set; }
     public DateTimeOffset ListenerConfiguredAtUtc { get; set; } = DateTimeOffset.MinValue;
+    public DateTimeOffset? LastFcmDataMessageAtUtc { get; set; }
     public DateTimeOffset? LastListenerRecycleAtUtc { get; set; }
     public CancellationTokenSource ListenerReconnectCancellationTokenSource { get; set; } = new();
     public SemaphoreSlim ListenerReconnectGate { get; } = new(1, 1);

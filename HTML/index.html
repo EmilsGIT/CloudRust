@@ -1062,6 +1062,7 @@
     let billingStatusSnapshot = null;
     let pairingStatusPollTimer = null;
     let lastPairingListenerRestartAttemptAt = 0;
+    let lastStalePairingListenerRestartAttemptAt = 0;
     let lastPairingImportedAtUtc = null;
     let lastObservedSwitchPairingAtUtc = null;
     let lastObservedMonitorPairingAtUtc = null;
@@ -1069,6 +1070,8 @@
     let pairingSteamIdentity = null;
     let latestTeamMembers = [];
     const pairingListenerRestartCooldownMs = 15000;
+    const stalePairingListenerRestartCooldownMs = 300000;
+    const stalePairingListenerThresholdMs = 120000;
     const fallbackStorage = new Map();
     if (mapDebugToggle) {
       mapDebugToggle.checked = true;
@@ -1728,6 +1731,15 @@
       return switchPending || monitorPending;
     }
 
+    function hasNamedPendingPairing() {
+      return (!switchIdInput?.value?.trim() && Boolean(switchNameInput?.value.trim()))
+        || (!monitorIdInput?.value?.trim() && Boolean(monitorNameInput?.value.trim()));
+    }
+
+    function isDevicePairingTabActive() {
+      return Array.from(panels).some((panel) => (panel.dataset.panel === 'switches' || panel.dataset.panel === 'monitors') && panel.classList.contains('active'));
+    }
+
     function shouldKeepPairingStatusPollActive() {
       if (!authenticatedUser || authenticatedUser.isAdmin) {
         return false;
@@ -1737,7 +1749,7 @@
       const hasConfig = Boolean(pairingStatusSnapshot?.hasConfig);
       const listenerConnected = Boolean(pairingStatusSnapshot?.listenerConnected);
       const pairingTabActive = Array.from(panels).some((panel) => panel.dataset.panel === 'pairing' && panel.classList.contains('active'));
-      return helperRunning || pairingTabActive || hasPendingPairingFields() || (hasConfig && !listenerConnected);
+      return helperRunning || pairingTabActive || isDevicePairingTabActive() || hasPendingPairingFields() || (hasConfig && !listenerConnected);
     }
 
     async function maybeEnsurePairingListenerRunning() {
@@ -1745,16 +1757,38 @@
         return;
       }
 
-      if (!pairingStatusSnapshot?.hasConfig || pairingStatusSnapshot?.listenerConnected || pairingStatusSnapshot?.steamLogin?.isRunning) {
+      if (!pairingStatusSnapshot?.hasConfig || pairingStatusSnapshot?.steamLogin?.isRunning) {
         return;
       }
 
       const now = Date.now();
-      if (now - lastPairingListenerRestartAttemptAt < pairingListenerRestartCooldownMs) {
+      const listenerConnected = Boolean(pairingStatusSnapshot.listenerConnected);
+      const configuredAtMs = Date.parse(pairingStatusSnapshot.listenerConfiguredAtUtc || '');
+      const lastFcmDataMessageAtMs = Date.parse(pairingStatusSnapshot.lastFcmDataMessageAtUtc || '');
+      const latestListenerActivityAtMs = Math.max(
+        Number.isFinite(configuredAtMs) ? configuredAtMs : 0,
+        Number.isFinite(lastFcmDataMessageAtMs) ? lastFcmDataMessageAtMs : 0
+      );
+      const listenerIsStale = listenerConnected
+        && (hasNamedPendingPairing() || isDevicePairingTabActive())
+        && latestListenerActivityAtMs > 0
+        && now - latestListenerActivityAtMs >= stalePairingListenerThresholdMs;
+      const restartCooldownMs = listenerIsStale
+        ? stalePairingListenerRestartCooldownMs
+        : pairingListenerRestartCooldownMs;
+      const lastRestartAttemptAt = listenerIsStale
+        ? lastStalePairingListenerRestartAttemptAt
+        : lastPairingListenerRestartAttemptAt;
+
+      if ((listenerConnected && !listenerIsStale) || now - lastRestartAttemptAt < restartCooldownMs) {
         return;
       }
 
-      lastPairingListenerRestartAttemptAt = now;
+      if (listenerIsStale) {
+        lastStalePairingListenerRestartAttemptAt = now;
+      } else {
+        lastPairingListenerRestartAttemptAt = now;
+      }
 
       try {
         await fetchJson('/api/pairing/listener/start', {
@@ -1964,15 +1998,21 @@
       const latestMonitorEntityId = extractEntityId(latestMonitorPairing);
       const switchFieldEmpty = !switchIdInput?.value?.trim();
       const monitorFieldEmpty = !monitorIdInput?.value?.trim();
+      const switchStatusStale = latestSwitchEntityId
+        && (switchPairStatusInput?.dataset.pairingState !== 'paired'
+          || switchPairStatusInput?.textContent !== latestSwitchEntityId);
+      const monitorStatusStale = latestMonitorEntityId
+        && (monitorPairStatusInput?.dataset.pairingState !== 'paired'
+          || monitorPairStatusInput?.textContent !== latestMonitorEntityId);
 
-      if (latestSwitchEntityId && ((latestSwitchObservedAtUtc && latestSwitchObservedAtUtc !== lastObservedSwitchPairingAtUtc) || switchFieldEmpty)) {
+      if (latestSwitchEntityId && ((latestSwitchObservedAtUtc && latestSwitchObservedAtUtc !== lastObservedSwitchPairingAtUtc) || switchFieldEmpty || switchStatusStale)) {
         if (latestSwitchObservedAtUtc) {
           lastObservedSwitchPairingAtUtc = latestSwitchObservedAtUtc;
         }
         applyPairedSwitchId(latestSwitchEntityId);
       }
 
-      if (latestMonitorEntityId && ((latestMonitorObservedAtUtc && latestMonitorObservedAtUtc !== lastObservedMonitorPairingAtUtc) || monitorFieldEmpty)) {
+      if (latestMonitorEntityId && ((latestMonitorObservedAtUtc && latestMonitorObservedAtUtc !== lastObservedMonitorPairingAtUtc) || monitorFieldEmpty || monitorStatusStale)) {
         if (latestMonitorObservedAtUtc) {
           lastObservedMonitorPairingAtUtc = latestMonitorObservedAtUtc;
         }
@@ -3417,11 +3457,12 @@
       teamStatusLastRequestedAtMs = now;
       teamStatusRequestInFlight = (async () => {
         try {
-          const response = await fetch('/api/team/status');
-          const payload = await response.json();
+          const payload = await fetchJson('/api/team/status', {
+            cache: 'no-store'
+          });
 
-          if (!response.ok || !payload.ok) {
-            throw new Error(payload.message || 'Failed to load team info.');
+          if (!payload?.ok) {
+            throw new Error(payload?.message || 'Failed to load team info.');
           }
 
           latestTeamMembers = Array.isArray(payload.members) ? payload.members : [];

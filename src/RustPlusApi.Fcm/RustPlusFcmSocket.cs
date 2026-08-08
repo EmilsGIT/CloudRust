@@ -59,6 +59,11 @@ public abstract class RustPlusFcmSocket(Credentials credentials, ICollection<str
     public event EventHandler<string>? NotificationReceived;
 
     /// <summary>
+    /// Occurs when an FCM data message is received before Rust+ notification parsing.
+    /// </summary>
+    public event EventHandler<DataMessageStanza>? DataMessageReceived;
+
+    /// <summary>
     /// Occurs when the client is disconnecting from the FCM server.
     /// </summary>
     public event EventHandler? Disconnecting;
@@ -359,6 +364,11 @@ public abstract class RustPlusFcmSocket(Credentials credentials, ICollection<str
             persistentIds.Contains(dataMessage.PersistentId))
         {
             return;
+        }
+
+        if (dataMessage is not null)
+        {
+            DataMessageReceived?.Invoke(this, dataMessage);
         }
 
         if (dataMessage?.AppDatas is not { Count: > 0 })
