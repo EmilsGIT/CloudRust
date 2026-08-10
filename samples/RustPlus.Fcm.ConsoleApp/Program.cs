@@ -1660,11 +1660,17 @@ async Task HandlePairingStatusRequestAsync(HttpListenerContext context, UserAcco
 
     var runtime = GetListenerRuntime(authenticatedUser.Id);
     await SynchronizeRemoteSteamLoginAsync(runtime);
+    var playerRequestBudget = await runtime.PlayerRequestRateLimiter.GetBudgetAsync();
 
     await WriteJsonResponseAsync(context, 200, new
     {
         ok = true,
         hasConfig = !string.IsNullOrWhiteSpace(state.ListenerConfigJson),
+        playerRequestBudget = new
+        {
+            availableTokens = playerRequestBudget.AvailableTokens,
+            capacity = playerRequestBudget.Capacity
+        },
         listenerConnected = runtime.ListenerConnected,
         listenerConfiguredAtUtc = runtime.ListenerConfiguredAtUtc,
         lastFcmDataMessageAtUtc = runtime.LastFcmDataMessageAtUtc,
@@ -4254,6 +4260,17 @@ async Task<bool> TryWritePairingExpiredResponseAsync(HttpListenerContext context
         return false;
     }
 
+    runtime.ConsecutivePairingNotFoundResponses += 1;
+    if (runtime.ConsecutivePairingNotFoundResponses < 3)
+    {
+        await WriteJsonResponseAsync(context, 503, new
+        {
+            ok = false,
+            message = "Rust+ temporarily rejected the saved server pairing. Retrying before marking it expired."
+        });
+        return true;
+    }
+
     InvalidateServerPairingCache(runtime);
     await WriteJsonResponseAsync(context, 409, new
     {
@@ -4302,6 +4319,7 @@ async Task<T> ExecuteDirectRustPlusRequestAsync<T>(
                 var evaluation = evaluateResult(result);
                 if (evaluation.IsSuccess)
                 {
+                    runtime.ConsecutivePairingNotFoundResponses = 0;
                     return result;
                 }
 
@@ -6499,6 +6517,7 @@ file sealed class ListenerRuntime
     public SemaphoreSlim ListenerReconnectGate { get; } = new(1, 1);
     public SemaphoreSlim DirectRequestGate { get; } = new(1, 1);
     public RustPlusPlayerRequestRateLimiter PlayerRequestRateLimiter { get; } = new();
+    public int ConsecutivePairingNotFoundResponses { get; set; }
     public ConcurrentQueue<object> DebugEvents { get; } = new();
     public ConcurrentDictionary<Guid, StreamWriter> SseClients { get; } = new();
     public Notification<ServerEvent?>? LatestServerPairing { get; set; }

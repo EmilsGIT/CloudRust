@@ -114,6 +114,13 @@ body.auth-locked {
   word-break: break-word;
 }
 
+.sidebar-token-budget {
+  margin: -10px 0 16px;
+  font-size: 11px;
+  color: #237a51;
+  font-variant-numeric: tabular-nums;
+}
+
 .logout-card {
   width: min(100%, 440px);
 }

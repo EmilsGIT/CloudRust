@@ -53,6 +53,7 @@
         <span class="app-brand-text">cloudrust</span>
       </div>
       <p id="authSessionLabel" class="sidebar-session-label">Signed out</p>
+      <p id="rustPlusTokenBudget" class="sidebar-token-budget" hidden>Rust+ budget: -- / 25</p>
       <nav class="tab-list" aria-label="Main navigation">        
         <button id="pairingTabButton" class="tab active" type="button" data-tab="pairing">Pairing</button>
         <button class="tab" type="button" data-tab="info">Server Info</button>
@@ -919,6 +920,7 @@
     const authModeLoginButton = document.getElementById('authModeLoginButton');
     const authModeSignupButton = document.getElementById('authModeSignupButton');
     const authSessionLabel = document.getElementById('authSessionLabel');
+    const rustPlusTokenBudget = document.getElementById('rustPlusTokenBudget');
     const logoutButton = document.getElementById('logoutButton');
     const logoutStatus = document.getElementById('logoutStatus');
     const logoutSessionText = document.getElementById('logoutSessionText');
@@ -1306,6 +1308,8 @@
           : 'Signed out';
       }
 
+      updateRustPlusTokenBudget();
+
       if (logoutSessionText) {
         logoutSessionText.textContent = authenticatedUser
           ? `Signed in as ${authenticatedUser.username || authenticatedUser.email}${authenticatedUser.isAdmin ? ' (admin)' : vipBadge}.`
@@ -1376,6 +1380,23 @@
       }
 
       renderBillingStatus();
+    }
+
+    function updateRustPlusTokenBudget() {
+      if (!rustPlusTokenBudget) {
+        return;
+      }
+
+      const budget = pairingStatusSnapshot?.playerRequestBudget;
+      const availableTokens = Number(budget?.availableTokens);
+      const capacity = Number(budget?.capacity);
+      const hasBudget = authenticatedUser && !authenticatedUser.isAdmin
+        && Number.isFinite(availableTokens) && Number.isFinite(capacity);
+
+      rustPlusTokenBudget.hidden = !hasBudget;
+      rustPlusTokenBudget.textContent = hasBudget
+        ? `Rust+ budget: ${availableTokens.toFixed(1)} / ${capacity}`
+        : 'Rust+ budget: -- / 25';
     }
 
     function getPremiumOfferConfig(plan, provider) {
@@ -1973,12 +1994,14 @@
 
         syncPendingPairingsFromStatusSnapshot();
         renderPairingStatus();
+        updateRustPlusTokenBudget();
         if (pairingStatusText && statusMessage) {
           pairingStatusText.textContent = statusMessage;
         }
       } catch (error) {
         pairingStatusSnapshot = null;
         renderPairingStatus();
+        updateRustPlusTokenBudget();
         if (pairingStatusText) {
           pairingStatusText.textContent = error.message;
         }
